@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Sudoku Studio | DeGolyer ES",
-  description: "A little focus. A big discovery. Personalized Sudoku adventures, student records, rewards, and classroom insights for DeGolyer ES.",
+  title: "DeGolyer ES Sudoku Studio | Dallas ISD",
+  description: "Sudoku for the DeGolyer ES Dolphins in Dallas ISD. Student puzzles, personal records, rewards, and a protected teacher classroom dashboard.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

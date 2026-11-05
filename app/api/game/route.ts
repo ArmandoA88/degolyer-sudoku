@@ -75,7 +75,7 @@ export async function POST(request:Request){
     if(c){if(c.owner!==user.userId)throw new ApiError('This classroom already has a teacher.',403);}
     else {
       const classCode='DG-'+hex(crypto.getRandomValues(new Uint8Array(4))).toUpperCase();
-      const prizes:Prize[]=[{id:'sticker',name:'Sticker pick',description:'Choose a sticker with your teacher.',cost:60,icon:'star'},{id:'helper',name:'Classroom helper',description:'Be a classroom helper for a day.',cost:120,icon:'sparkles'},{id:'choice',name:'Choice time',description:'A teacher-approved choice activity.',cost:200,icon:'trophy'}];
+      const prizes:Prize[]=[];
       const data:Classroom={id:'main',name,teacherName,code:classCode,powerups:true,leaderboard:false,prizes};
       await sql('INSERT OR IGNORE INTO classrooms(id,owner,code,data) VALUES(?,?,?,?)','main',user.userId,classCode,JSON.stringify(data)).run();
       c=await classroomRow();if(c?.owner!==user.userId)throw new ApiError('This classroom already has a teacher.',403);
@@ -107,7 +107,7 @@ export async function POST(request:Request){
   } else if(action==='saveStudent'){
     const classroom=teacher();const data=input.student??{};const studentId=data.id?text(data.id,'Student ID',60):id();const existing=data.id?await one('SELECT * FROM students WHERE id=? AND classroom_id=?',studentId,classroom.id):null;
     if(data.id&&!existing)throw new ApiError('Student not found.',404);
-    const name=text(data.name,'Student nickname',30),studentCode=code(data.code,'Student code'),avatar=text(data.avatar??'🌟','Avatar',16),theme=text(data.theme??'mint','Theme',24),levelId=String(data.levelId??'easy'),goal=int(data.goal??3,'Goal',1,20);
+    const name=text(data.name,'Student nickname',30),studentCode=code(data.code,'Student code'),avatar=text(data.avatar??'🐬','Avatar',16),theme=text(data.theme??'navy','Theme',24),levelId=String(data.levelId??'easy'),goal=int(data.goal??3,'Goal',1,20);
     if(!LEVELS.some(l=>l.id===levelId))throw new ApiError('Choose a valid starting level.');
     const duplicate=await one('SELECT id FROM students WHERE classroom_id=? AND code=? AND id<>?',classroom.id,studentCode,studentId);if(duplicate)throw new ApiError('That student code is already in use.');
     let secret=existing?.pin_hash;

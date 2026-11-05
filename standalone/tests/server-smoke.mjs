@@ -25,6 +25,7 @@ const cwdA=path.join(fixture,'First unrelated working folder'),cwdB=path.join(fi
 mkdirSync(cwdA);mkdirSync(cwdB);
 const dataDir=path.join(portableDir,'SudokuData');
 const password='LocalFixturePass-8246',pin='8246';
+const sampleContent=/Maya R\.|Leo M\.|Sofia G\.|Ethan J\.|Isabella A\.|Noah T\.|Demo classroom|Example scores stay on this device|demoSolution|demoHistory/i;
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const pass=text=>console.log('PASS '+text);
 let child,logs='',origin;
@@ -98,25 +99,33 @@ try{
   assert.ok(setupUrl,'First run must print a local teacher setup link.');
   const anonymous=device(),spoofed=device({'oai-authenticated-user-id':'standalone-teacher','oai-authenticated-user-email':'local-teacher@degolyer.invalid'});
   const before=await state(spoofed);assert.equal(before.user,null);assert.equal(before.isTeacher,false);
+  assert.equal(before.classroom,null,'A fresh server must start without a fabricated classroom.');
+  assert.equal(before.student,null);assert.equal(before.game,null);
+  for(const key of ['records','leaderboard','redemptions'])assert.deepEqual(before[key],[],'Fresh '+key+' must be empty.');
+  assert.equal(before.dashboard,undefined,'A fresh server must not contain a fake teacher dashboard.');
+  assert.equal(sampleContent.test(JSON.stringify(before)),false,'Fresh server state must not contain sample records.');
+  pass('fresh server starts with an empty classroom, roster, game, records, and rewards');
   const teacher=device();let t=await teacherSignIn(teacher,setupUrl);
   t=await action(teacher,{action:'setup',name:'EXE Persistence Test',teacherName:'Local Teacher'});
   assert.ok(t.isTeacher&&t.classroom);const classCode=t.classroom.code;
+  assert.deepEqual(t.classroom.prizes,[],'A newly configured classroom must not contain sample rewards.');
   const denied=await anonymous('/api/game',{action:'saveStudent',student:{}},{allowError:true});assert.equal(denied.status,403);
   const parallel=await Promise.all(Array.from({length:6},(_,i)=>state(i%2?teacher:spoofed)));
   parallel.forEach((value,i)=>assert.equal(value.isTeacher,!!(i%2),'Parallel requests must retain separate teacher identities.'));
   pass('copied EXE starts without Node on PATH; teacher setup, CSRF, and untrusted identity-header isolation');
 
-  const page=await anonymous('/');assert.match(page.raw,/Sudoku Studio/);
+  const page=await anonymous('/');assert.match(page.raw,/Sudoku Studio/);assert.equal(sampleContent.test(page.raw),false,'Student landing page must not contain sample profiles.');
   const assetPaths=[...page.raw.matchAll(/(?:src|href)=["']([^"']+\.(?:js|css)(?:\?[^"']*)?)["']/g)].map(m=>m[1]);
   assert.ok(assetPaths.some(p=>p.endsWith('.js')),'Standalone HTML must reference an embedded JavaScript client.');
-  for(const asset of assetPaths){assert.ok(asset.startsWith('/'),'Client assets must be local, not CDN URLs.');const r=await anonymous(asset);assert.equal(r.status,200);assert.equal(r.response.headers.get('cache-control'),'no-cache','Fixed asset URLs must revalidate after an EXE upgrade.');assert.ok(r.raw.length>100);}
+  for(const asset of assetPaths){assert.ok(asset.startsWith('/'),'Client assets must be local, not CDN URLs.');const r=await anonymous(asset);assert.equal(r.status,200);assert.equal(r.response.headers.get('cache-control'),'no-cache','Fixed asset URLs must revalidate after an EXE upgrade.');assert.ok(r.raw.length>100);assert.equal(sampleContent.test(r.raw),false,'Embedded student assets must not include sample profiles, fake scores, or demo state.');}
   for(const blocked of ['/SudokuData/classroom.sqlite','/package.json','/.env','/app/api/game/route.ts','/..%2fSudokuData%2fclassroom.sqlite','/%2e%2e%2fpackage.json']){
     const result=await anonymous(blocked,undefined,{allowError:true});assert.ok(result.status>=400,blocked+' must not serve internal files.');
   }
   pass('embedded game/CSS/JS are served locally while data, source, and traversal paths are blocked');
 
-  t=await action(teacher,{action:'saveStudent',student:{name:'EXE Student',code:'EXE-STUDENT',pin,avatar:'🐼',theme:'lime',levelId:'mini',goal:2}});
+  t=await action(teacher,{action:'saveStudent',student:{name:'EXE Student',code:'EXE-STUDENT',pin,levelId:'mini',goal:2}});
   const student=t.dashboard.students.find(s=>s.code==='EXE-STUDENT');assert.ok(student);
+  assert.equal(student.avatar,'🐬');assert.equal(student.theme,'navy','Real student profiles must default to the DeGolyer blue theme.');
   const first=device();const roster=await action(first,{action:'roster',classCode});
   assert.ok(roster.students.some(s=>s.id===student.id));
   for(const s of roster.students)assert.deepEqual(Object.keys(s).sort(),['avatar','id','name']);
@@ -127,7 +136,7 @@ try{
   s=await action(first,{action:'start',levelId:'mini'});const empties=s.game.puzzle.flatMap((v,i)=>v?[]:[i]),nextSolution=solve(s.game);
   s=await action(first,{action:'move',index:empties[0],value:nextSolution[empties[0]]});
   s=await action(first,{action:'note',index:empties[1],value:nextSolution[empties[1]]});
-  s=await action(first,{action:'profile',avatar:'🦊',theme:'coral'});s=await action(first,{action:'pause'});
+  s=await action(first,{action:'profile',avatar:'🦊',theme:'teal'});s=await action(first,{action:'pause'});
   const saved=structuredClone(s);
   assert.ok(existsSync(path.join(dataDir,'classroom.sqlite')),'Database must be stored beside the copied executable, not in its current working directory.');
   pass('selected name/PIN saves board, notes, best score, coins, profile, and completion record to local SQLite');

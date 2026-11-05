@@ -22,9 +22,13 @@ See [server instructions](SERVER-INSTRUCTIONS.txt), [build instructions](standal
 
 The classroom code loads only the names and avatars needed for the name picker. A student's PIN is required before their saved stats or board can be read or changed. Profiles use a permanent student ID, so editing a name does not erase records or combine students who share a name. Use initials or unique classroom nicknames to help students distinguish their names. Only the classroom code and last selected student ID are remembered on the device; PINs and real student progress are not stored in browser local storage.
 
-The hosted version needs an internet connection. Check the save indicator before changing devices; if a change fails to save, use the offered retry or refresh action. Demo progress remains device-local.
+The hosted version needs an internet connection. Check the save indicator before changing devices; if a change fails to save, use the offered retry or refresh action.
 
-The initial example classroom is clearly marked **Demo**. Its student activity is simulated and saved only on that device. Set up a real classroom to collect real student progress.
+The game starts with an empty classroom. Create the teacher classroom and add student names and PINs before the first lesson. The dashboard shows only saved classroom activity and records. Old sample progress stored by an earlier version is cleared automatically when that browser opens the updated game.
+
+## School colors
+
+The navy-led design uses teal and gray accents, following the [school's published colors](https://degolyer.dallasisd.org/our-school/general-information). The school mascot is the Dolphin. Students can choose Navy Blue, DeGolyer Teal, or Silver Gray accents within this palette.
 
 ## Teacher visibility
 
