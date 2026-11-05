@@ -6,9 +6,13 @@ A classroom Sudoku game with five levels (4×4, 6×6, and three 9×9 levels), un
 
 1. Open the hosted Site and choose **Set up my classroom**. The teacher signs in through ChatGPT. The first classroom belongs to that signed-in account.
 2. Open **Teacher dashboard**, create student profiles, and assign each student a code and PIN. Use classroom nicknames or first names. Save PINs when you create them; the app does not display stored PINs.
-3. Give students the Site link, classroom code, their student code, and their PIN. The hosted game entry opens by link; students do not need a ChatGPT account. The teacher dashboard still requires the teacher's ChatGPT account.
+3. Choose **Share classroom** and copy the classroom link. Share it through your school LMS, a message, or a bookmark on classroom devices. It works on school Wi-Fi and other internet-connected networks, without keeping the teacher's computer running. Students open the link, pick their name, and enter their PIN; they do not need a ChatGPT account. The teacher dashboard still requires the teacher's ChatGPT account.
 4. Customize each student's starting level, daily goal, avatar, and color theme. Adjust the classroom name, power-ups, leaderboard, and prize catalog in teacher settings.
-5. Students sign in, choose a puzzle, and play. Boards, notes, scores, and coins save to the shared database. A help button sends a visible request to the teacher.
+5. Students sign in, choose a puzzle, and play. Boards, notes, scores, and coins automatically save to the shared database after each successful action. Picking the same name and entering its PIN restores that student's saved game, records, rewards, and customizations on another device. A help button sends a visible request to the teacher.
+
+The classroom code loads only the names and avatars needed for the name picker. A student's PIN is required before their saved stats or board can be read or changed. Profiles use a permanent student ID, so editing a name does not erase records or combine students who share a name. Use initials or unique classroom nicknames to help students distinguish their names. Only the classroom code and last selected student ID are remembered on the device; PINs and real student progress are not stored in browser local storage.
+
+The hosted version needs an internet connection. Check the save indicator before changing devices; if a change fails to save, use the offered retry or refresh action. Demo progress remains device-local.
 
 The initial example classroom is clearly marked **Demo**. Its student activity is simulated and saved only on that device. Set up a real classroom to collect real student progress.
 

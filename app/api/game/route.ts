@@ -80,14 +80,22 @@ export async function POST(request:Request){
       await sql('INSERT OR IGNORE INTO classrooms(id,owner,code,data) VALUES(?,?,?,?)','main',user.userId,classCode,JSON.stringify(data)).run();
       c=await classroomRow();if(c?.owner!==user.userId)throw new ApiError('This classroom already has a teacher.',403);
     }
+  } else if(action==='roster'){
+    const classCode=code(input.classCode,'Class code'),stamp=now();
+    const key='roster:'+await hash(request.headers.get('cf-connecting-ip')??'shared-network');
+    await sql('INSERT INTO login_attempts(key,count,reset_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN reset_at<? THEN 1 ELSE count+1 END,reset_at=CASE WHEN reset_at<? THEN ? ELSE reset_at END',key,stamp+60000,stamp,stamp,stamp+60000).run();
+    const attempt=await one('SELECT count FROM login_attempts WHERE key=?',key);if(attempt&&attempt.count>120)throw new ApiError('Please wait a minute before loading classroom names again.',429);
+    if(!c||c.code!==classCode)throw new ApiError('Classroom not found. Check the code with your teacher.',404);
+    const roster=await all('SELECT id,name,avatar FROM students WHERE classroom_id=? ORDER BY name,id',c.id);
+    return json({classroom:{name:parse<Classroom>(c.data).name},students:roster.map(r=>({id:r.id,name:r.name,avatar:r.avatar}))});
   } else if(action==='login'){
-    const classCode=code(input.classCode,'Class code'),studentCode=code(input.studentCode,'Student code'),pin=text(input.pin,'PIN',12,4);
+    const classCode=code(input.classCode,'Class code'),studentId=input.studentId?text(input.studentId,'Student',60):null,studentCode=studentId?null:code(input.studentCode,'Student code'),pin=text(input.pin,'PIN',12,4);
     if(!/^\d{4,12}$/.test(pin))throw new ApiError('Use your 4–12 digit PIN.');
-    const key=await hash(classCode+':'+studentCode),stamp=now();
+    const key=await hash(classCode+':'+(studentId?'id:'+studentId:'code:'+studentCode)),stamp=now();
     await sql('INSERT INTO login_attempts(key,count,reset_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN reset_at<? THEN 1 ELSE count+1 END,reset_at=CASE WHEN reset_at<? THEN ? ELSE reset_at END',key,stamp+900000,stamp,stamp,stamp+900000).run();
     const attempt=await one('SELECT count FROM login_attempts WHERE key=?',key);if(attempt&&attempt.count>10)throw new ApiError('Too many sign-in attempts. Ask your teacher and try again in 15 minutes.',429);
-    const target=c&&c.code===classCode?await one('SELECT * FROM students WHERE classroom_id=? AND code=?',c.id,studentCode):null;
-    if(!target||!await verifyPin(pin,target.pin_hash))throw new ApiError('Check your class code, student code, and PIN.',401);
+    const target=c&&c.code===classCode?studentId?await one('SELECT * FROM students WHERE classroom_id=? AND id=?',c.id,studentId):await one('SELECT * FROM students WHERE classroom_id=? AND code=?',c.id,studentCode):null;
+    if(!target||!await verifyPin(pin,target.pin_hash))throw new ApiError('Check your classroom, selected name, and PIN.',401);
     const token=hex(crypto.getRandomValues(new Uint8Array(32)));
     await db().batch([sql('DELETE FROM sessions WHERE student_id=? OR expires_at<?',target.id,stamp),sql('INSERT INTO sessions(hash,student_id,expires_at) VALUES(?,?,?)',await hash(token),target.id,stamp+28800000),sql('DELETE FROM login_attempts WHERE key=?',key),sql('UPDATE students SET last_seen=? WHERE id=?',stamp,target.id)]);
     cookie=tokenCookie(request,token);s=target;
