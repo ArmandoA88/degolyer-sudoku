@@ -30,10 +30,21 @@ yarn-error.log*
 .env*
 .dev.vars*
 *.pem
+*.key
+*.pfx
+*.p12
+
+# Classroom records stay on the teacher's computer
+SudokuData/
+*.sqlite*
+*.db
+*.db-*
+*.log
 
 # Checkout-local tool state
 /.wrangler/
 /.sites-runtime/
+/.tooling/
 
 # Workspace scaffolding and publication archives
 /.agents/

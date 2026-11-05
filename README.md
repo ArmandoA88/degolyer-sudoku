@@ -2,6 +2,16 @@
 
 A classroom Sudoku game with five levels (4×4, 6×6, and three 9×9 levels), unique puzzles, student profiles, saved games, power-ups, personal records, earned coins, and teacher-managed prizes.
 
+Play the [online game](https://degolyer-sudoku-studio.armandoa.chatgpt.site), or download the [standalone Windows server](https://github.com/ArmandoA88/degolyer-sudoku/releases/latest) for a classroom network without internet access.
+
+## Standalone Windows server
+
+Download `DeGolyer-Sudoku-Server.exe` from Releases, put it in a writable folder, and double-click it. Create the teacher password and classroom, add students, then choose **Share classroom**. Students on the same network pick their name and enter their PIN. No Node.js installation is needed to run the EXE.
+
+The local server saves records in `SudokuData/classroom.sqlite` beside the EXE. Keep the server running while students play. Stop it before backing up or moving the complete data folder. The local and hosted editions use separate databases.
+
+See [server instructions](SERVER-INSTRUCTIONS.txt), [build instructions](standalone/BUILD.md), and [runtime architecture](standalone/README-runtime.md).
+
 ## Classroom setup
 
 1. Open the hosted Site and choose **Set up my classroom**. The teacher signs in through ChatGPT. The first classroom belongs to that signed-in account.
@@ -27,6 +37,8 @@ Completed games earn game coins. Hints, scans, and time freezes are limited per 
 ## Development
 
 Node 22.13+ and npm are required. Install dependencies with the Sites plugin's `install-dependencies.mjs` helper, run `npm run dev`, and build with the Sites `build-site.mjs` helper. The Vinext starter provides ChatGPT identity, a Cloudflare Worker, and a D1 binding named `DB`. Production and preview databases are separate.
+
+The checked-in hosting manifest identifies the original deployed Site. To deploy your own copy with Sites, create a new Site and replace that project ID with your own; Site access permissions are enforced independently of this public source repository. Runtime secrets, student databases, and test output are excluded from Git.
 
 Schema changes live in `db/schema.ts`; run `npm run db:generate` and commit generated migrations. Apply local migrations using Wrangler as described in the supplied Sites starter documentation. Production migrations are applied by the Sites deployment workflow.
 

@@ -1,0 +1,40 @@
+DEGOLYER ES SUDOKU — STANDALONE CLASSROOM SERVER
+
+Run DeGolyer-Sudoku-Server.exe. No Node.js, npm, installation, or internet connection is needed to play on your local network.
+
+FIRST RUN
+1. Double-click DeGolyer-Sudoku-Server.exe and leave its server window open.
+2. The teacher setup page opens on this computer. Create your teacher password.
+3. In the game, choose Set up my classroom, then add your student names and private PINs.
+4. Open Teacher dashboard > Share classroom. Copy the classroom link and give it to students.
+5. Students open that link on a device connected to the same school Wi-Fi or wired network. They pick their name and enter their PIN.
+
+The server window shows the local teacher address and available network addresses. Students use a network address, not localhost or 127.0.0.1. If the computer has multiple network adapters, use the address reachable from your students' devices.
+
+SAVED RECORDS
+The server creates SudokuData beside the EXE. Student profiles, puzzles, notes, scores, personal bests, coins, prizes, and teacher settings are stored in SudokuData/classroom.sqlite. This data survives closing and restarting the EXE.
+
+Keep the server computer on and the EXE running while students play. The save indicator confirms successful saves. A failed save shows retry or reload controls.
+
+To back up or move the classroom, first stop the server, then copy the EXE and its entire SudokuData folder together. Keep the backup private because it contains classroom records.
+
+This local server has its own classroom database. The previously published online game uses its cloud database; there is no automatic synchronization between the two editions.
+
+TEACHER ACCESS
+Teacher administration is available on the server computer at http://127.0.0.1:8787/teacher and uses the password you create. Student devices use the classroom link and their PINs. The local edition does not require ChatGPT sign-in.
+
+NETWORK ACCESS
+The default server port is 8787. Student devices must be able to reach that port on the server computer. If Windows or your school firewall requires permission for incoming connections, your IT team may need to approve the server on the classroom network.
+
+The EXE displays its current network links each time it starts. A computer's network address can change when it changes networks.
+
+STOPPING AND OPTIONS
+Press Ctrl+C in the server window to stop it.
+Optional command-line arguments:
+  --port 8790              Use a different port.
+  --host 127.0.0.1         Allow only this computer to connect.
+  --data-dir "D:/Sudoku"   Store classroom data in a chosen folder.
+  --no-open               Do not open the teacher page automatically.
+  --help                  Show available options.
+
+This is a Windows x64 executable. You can copy the single EXE to another Windows x64 computer; it creates its own data folder there. To retain an existing classroom, copy its SudokuData folder too.
