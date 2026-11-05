@@ -36,7 +36,8 @@ try{
   await okay(teacher,{action:'settings',settings:{...t.classroom,prizes:[...t.classroom.prizes,prize]}});
   t=await okay(teacher,{action:'saveStudent',student:{name:`Concurrency ${tag}`,code,pin,avatar:'owl',theme:'sage',levelId:'mini',goal:3}});
   const fixture=t.dashboard.students.find(s=>s.code===code);assert.ok(fixture);
-  let s=await okay(student,{action:'login',classCode:t.classroom.code,studentCode:code,pin});
+  assert.equal('code' in t.classroom,false);
+  let s=await okay(student,{action:'login',studentId:fixture.id,pin});
   s=await okay(student,{action:'start',levelId:'mini'});const replacedGame=s.game.id;
   s=await okay(student,{action:'start',levelId:'mini'});const originalBoard=[...s.game.board],editable=s.game.puzzle.findIndex(v=>!v);
   const stale=await student({action:'move',gameId:replacedGame,index:editable,value:1});assert.equal(stale.status,409);

@@ -2,7 +2,7 @@
 
 The Windows SEA executable embeds the compiled browser app and migration SQL. It runs the same game API through two build aliases: `cloudflare:workers` becomes the local SQLite binding, and the hosted identity helper becomes an AsyncLocalStorage identity supplied by the local teacher session.
 
-No OpenAI identity header is trusted. Teacher setup and sign-in require both a loopback socket and loopback hostname. First setup uses a random link printed only in the server window, then a teacher-created password. Passwords use salted scrypt hashes; teacher and student session tokens are stored as hashes. Teacher sessions work only on the server computer. Students use the network link, classroom code, name, and PIN.
+No OpenAI identity header is trusted. Teacher setup and sign-in require both a loopback socket and loopback hostname. First setup uses a random link printed only in the server window, then a teacher-created password. Passwords use salted scrypt hashes; teacher and student session tokens are stored as hashes. Teacher sessions work only on the server computer. There is one classroom: students open the network link, pick their name, and enter their PIN.
 
 `SudokuData/classroom.sqlite` lives beside the executable, with SQLite WAL and full synchronization enabled. The API's D1 batch calls run as synchronous SQLite transactions to preserve the game's `changes()` guards, exactly-once rewards, and coin balance checks. Schema migrations are tracked separately and applied transactionally. Stop the server before copying its data directory as a backup. The hosted Site and this local database are separate classrooms.
 

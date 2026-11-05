@@ -1,5 +1,5 @@
 export type Prize = {id:string;name:string;description:string;cost:number;icon:string};
-export type Classroom = {id:string;name:string;teacherName:string;code:string;powerups:boolean;leaderboard:boolean;prizes:Prize[]};
+export type Classroom = {id:string;name:string;teacherName:string;powerups:boolean;leaderboard:boolean;prizes:Prize[]};
 export type Student = {id:string;name:string;code:string;avatar:string;theme:string;levelId:string;goal:number;coins:number;totalSolved:number;streak:number;best:Record<string,number>;lastSeen:number;helpRequested:boolean;teacherNote:string};
 export type Game = {id:string;levelId:string;size:number;boxRows:number;boxCols:number;puzzle:number[];board:number[];notes:number[][];elapsed:number;mistakes:number;hints:number;scans:number;freezes:number;status:'playing'|'paused'|'completed';startedAt:number;updatedAt:number;progress:number;powerups:{hint:number;scan:number;freeze:number};usedPowerups:boolean;revision:number;freezeRemaining?:number};
 export type ScoreRecord = {id:string;studentId:string;studentName:string;levelId:string;seconds:number;mistakes:number;hints:number;coins:number;assisted:boolean;completedAt:number};

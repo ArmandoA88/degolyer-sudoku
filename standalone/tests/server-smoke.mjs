@@ -9,6 +9,7 @@ import {closeSync,copyFileSync,existsSync,mkdirSync,mkdtempSync,openSync,readSyn
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
 import {fileURLToPath} from 'node:url';
 
 assert.equal(process.platform,'win32','This integration test exercises the Windows executable.');
@@ -26,6 +27,7 @@ mkdirSync(cwdA);mkdirSync(cwdB);
 const dataDir=path.join(portableDir,'SudokuData');
 const password='LocalFixturePass-8246',pin='8246';
 const sampleContent=/Maya R\.|Leo M\.|Sofia G\.|Ethan J\.|Isabella A\.|Noah T\.|Demo classroom|Example scores stay on this device|demoSolution|demoHistory/i;
+const retiredClassUi=/\b(?:classroom|class)\s+code\b|[?&]class=/i;
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const pass=text=>console.log('PASS '+text);
 let child,logs='',origin;
@@ -104,32 +106,35 @@ try{
   for(const key of ['records','leaderboard','redemptions'])assert.deepEqual(before[key],[],'Fresh '+key+' must be empty.');
   assert.equal(before.dashboard,undefined,'A fresh server must not contain a fake teacher dashboard.');
   assert.equal(sampleContent.test(JSON.stringify(before)),false,'Fresh server state must not contain sample records.');
+  assert.deepEqual((await anonymous('/api/game',{action:'roster'})).data,{classroom:null,students:[]},'The unconfigured single classroom must return an empty name picker without a class code.');
   pass('fresh server starts with an empty classroom, roster, game, records, and rewards');
   const teacher=device();let t=await teacherSignIn(teacher,setupUrl);
   t=await action(teacher,{action:'setup',name:'EXE Persistence Test',teacherName:'Local Teacher'});
-  assert.ok(t.isTeacher&&t.classroom);const classCode=t.classroom.code;
+  assert.ok(t.isTeacher&&t.classroom);assert.equal('code' in t.classroom,false,'Classroom JSON must not expose a retired class code.');
   assert.deepEqual(t.classroom.prizes,[],'A newly configured classroom must not contain sample rewards.');
   const denied=await anonymous('/api/game',{action:'saveStudent',student:{}},{allowError:true});assert.equal(denied.status,403);
   const parallel=await Promise.all(Array.from({length:6},(_,i)=>state(i%2?teacher:spoofed)));
   parallel.forEach((value,i)=>assert.equal(value.isTeacher,!!(i%2),'Parallel requests must retain separate teacher identities.'));
   pass('copied EXE starts without Node on PATH; teacher setup, CSRF, and untrusted identity-header isolation');
 
-  const page=await anonymous('/');assert.match(page.raw,/Sudoku Studio/);assert.equal(sampleContent.test(page.raw),false,'Student landing page must not contain sample profiles.');
+  const page=await anonymous('/');assert.match(page.raw,/Sudoku Studio/);assert.equal(sampleContent.test(page.raw),false,'Student landing page must not contain sample profiles.');assert.equal(retiredClassUi.test(page.raw),false,'The one-classroom page must not display class-code controls.');
   const assetPaths=[...page.raw.matchAll(/(?:src|href)=["']([^"']+\.(?:js|css)(?:\?[^"']*)?)["']/g)].map(m=>m[1]);
   assert.ok(assetPaths.some(p=>p.endsWith('.js')),'Standalone HTML must reference an embedded JavaScript client.');
-  for(const asset of assetPaths){assert.ok(asset.startsWith('/'),'Client assets must be local, not CDN URLs.');const r=await anonymous(asset);assert.equal(r.status,200);assert.equal(r.response.headers.get('cache-control'),'no-cache','Fixed asset URLs must revalidate after an EXE upgrade.');assert.ok(r.raw.length>100);assert.equal(sampleContent.test(r.raw),false,'Embedded student assets must not include sample profiles, fake scores, or demo state.');}
+  for(const asset of assetPaths){assert.ok(asset.startsWith('/'),'Client assets must be local, not CDN URLs.');const r=await anonymous(asset);assert.equal(r.status,200);assert.equal(r.response.headers.get('cache-control'),'no-cache','Fixed asset URLs must revalidate after an EXE upgrade.');assert.ok(r.raw.length>100);assert.equal(sampleContent.test(r.raw),false,'Embedded student assets must not include sample profiles, fake scores, or demo state.');assert.equal(retiredClassUi.test(r.raw),false,'Embedded student assets must not contain class-code prompts or selected-class share URLs.');}
   for(const blocked of ['/SudokuData/classroom.sqlite','/package.json','/.env','/app/api/game/route.ts','/..%2fSudokuData%2fclassroom.sqlite','/%2e%2e%2fpackage.json']){
     const result=await anonymous(blocked,undefined,{allowError:true});assert.ok(result.status>=400,blocked+' must not serve internal files.');
   }
   pass('embedded game/CSS/JS are served locally while data, source, and traversal paths are blocked');
 
-  t=await action(teacher,{action:'saveStudent',student:{name:'EXE Student',code:'EXE-STUDENT',pin,levelId:'mini',goal:2}});
-  const student=t.dashboard.students.find(s=>s.code==='EXE-STUDENT');assert.ok(student);
+  t=await action(teacher,{action:'saveStudent',student:{name:'EXE Student',pin,levelId:'mini',goal:2}});
+  const student=t.dashboard.students.find(s=>s.name==='EXE Student');assert.ok(student);
   assert.equal(student.avatar,'🐬');assert.equal(student.theme,'navy','Real student profiles must default to the DeGolyer blue theme.');
-  const first=device();const roster=await action(first,{action:'roster',classCode});
+  const first=device();const roster=await action(first,{action:'roster'});
+  assert.deepEqual(Object.keys(roster).sort(),['classroom','students']);assert.deepEqual(Object.keys(roster.classroom),['name']);
   assert.ok(roster.students.some(s=>s.id===student.id));
   for(const s of roster.students)assert.deepEqual(Object.keys(s).sort(),['avatar','id','name']);
-  let s=await action(first,{action:'login',classCode,studentId:student.id,pin});
+  assert.deepEqual(await action(device(),{action:'roster',classCode:'RETIRED-IGNORED-CODE'}),roster,'Legacy class-code input must not select a different classroom.');
+  let s=await action(first,{action:'login',studentId:student.id,pin});
   s=await action(first,{action:'start',levelId:'mini'});const solution=solve(s.game);
   for(let i=0;i<solution.length;i++)if(!s.game.puzzle[i])s=await action(first,{action:'move',index:i,value:solution[i],gameId:s.game.id,revision:s.game.revision});
   assert.equal(s.student.totalSolved,1);assert.equal(s.records.length,1);assert.ok(s.student.coins>0);assert.equal(typeof s.student.best.mini,'number');
@@ -141,18 +146,22 @@ try{
   assert.ok(existsSync(path.join(dataDir,'classroom.sqlite')),'Database must be stored beside the copied executable, not in its current working directory.');
   pass('selected name/PIN saves board, notes, best score, coins, profile, and completion record to local SQLite');
 
-  await stop();await start(cwdB);
+  await stop();
+  const legacyDatabase=new DatabaseSync(path.join(dataDir,'classroom.sqlite'));
+  try{const row=legacyDatabase.prepare('SELECT data FROM classrooms WHERE id=?').get('main');const legacyClassroom=JSON.parse(row.data);legacyClassroom.code='OLD-CLASS-CODE';legacyDatabase.prepare('UPDATE classrooms SET data=? WHERE id=?').run(JSON.stringify(legacyClassroom),'main');}finally{legacyDatabase.close();}
+  await start(cwdB);
   assert.ok(!logs.includes('/teacher?setup='),'Restart must retain the configured teacher password.');
   const teacherAgain=device();t=await teacherSignIn(teacherAgain);
-  assert.ok(t.isTeacher);assert.equal(t.classroom.code,classCode);
-  const fresh=device();await action(fresh,{action:'roster',classCode});
-  const restored=await action(fresh,{action:'login',classCode,studentId:student.id,pin});
+  assert.ok(t.isTeacher);assert.equal(t.classroom.name,'EXE Persistence Test');assert.equal('code' in t.classroom,false);
+  const fresh=device();await action(fresh,{action:'roster'});
+  const restored=await action(fresh,{action:'login',studentId:student.id,pin});
   assert.deepEqual(restored.game,saved.game,'Restart + new device must restore exact paused puzzle, notes, timer, and counters.');
   assert.deepEqual(restored.records,saved.records);
   for(const field of ['id','coins','totalSolved','streak','best','avatar','theme','goal','levelId'])assert.deepEqual(restored.student[field],saved.student[field],'Restart must retain '+field);
   assert.equal(t.dashboard.students.find(row=>row.id===student.id).totalSolved,1);
-  const badPin=await device()('/api/game',{action:'login',classCode,studentId:student.id,pin:'0000'},{allowError:true});assert.equal(badPin.status,401);assert.deepEqual(Object.keys(badPin.data),['error']);
-  pass('same EXE restarted from a different folder restores teacher account and exact student records in fresh sessions');
+  const badPinDevice=device(),badPin=await badPinDevice('/api/game',{action:'login',studentId:student.id,pin:'0000'},{allowError:true});assert.equal(badPin.status,401);assert.deepEqual(Object.keys(badPin.data),['error']);
+  const rejectedState=await state(badPinDevice);assert.equal(rejectedState.student,null);assert.equal(rejectedState.game,null);assert.deepEqual(rejectedState.records,[]);
+  pass('restart from another folder preserves legacy classroom data and exact student records while hiding retired class codes');
 
   await stop();const defaultServer=await start(cwdB,false);
   const lan=Object.values(os.networkInterfaces()).flat().find(v=>v&&v.family==='IPv4'&&!v.internal&&/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(v.address));

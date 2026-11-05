@@ -48,12 +48,12 @@ const offlineBrowserPlugin = {
         ['Students open it on school Wi-Fi or another internet connection. A browser is all they need.', 'Students open it on the same school Wi-Fi or wired network as the server. A browser is all they need.'],
         ['Students do not need a ChatGPT account. Your teacher dashboard still requires your teacher sign-in. Add student names before sharing the link.', 'Students use their name and PIN. Open the teacher dashboard on the server computer using its local teacher password. Add student names before sharing the link.'],
         ['No student ChatGPT account is needed.', 'No student account outside this classroom is needed.'],
-        ['Students use their classroom code and private PIN. No student ChatGPT account is needed.', 'Students use their classroom code and private PIN on the same network as this server.'],
+        ['Students pick their name and enter their private PIN. No student ChatGPT account is needed.', 'Students pick their name and enter their private PIN on the same network as this server.'],
         ['Teacher access uses your signed-in account. Sign in first to create and protect your classroom dashboard.', 'Teacher access uses the password created on this server computer. Sign in locally to create and protect your classroom dashboard.'],
         ['Sign in to set up', 'Teacher sign in'],
       ];
       for (const [from,to] of replacements) code = code.replaceAll(from,to);
-      code = code.replaceAll("window.location.origin+'/?class='", "((window as any).__SUDOKU_SHARE_ORIGIN__||window.location.origin)+'/?class='");
+      code = code.replaceAll("window.location.origin+'/'", "((window as any).__SUDOKU_SHARE_ORIGIN__||window.location.origin)+'/'");
       return {contents:code, loader:'tsx', resolveDir:path.dirname(file)};
     });
   },

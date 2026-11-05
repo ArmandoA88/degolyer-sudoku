@@ -80,7 +80,7 @@ try {
   if (!t.classroom) t = await action(teacher,{action:'setup',name:'DeGolyer ES · Local Smoke Class',teacherName:'Smoke Test Teacher'});
   assert.ok(t.isTeacher && t.classroom, 'teacher owns a configured classroom');
   originalSettings = structuredClone(t.classroom);
-  const code = t.classroom.code;
+  assert.equal('code' in t.classroom,false,'Teacher classroom data must not include a class code.');
   temporaryPrizeId = `smoke-${tag}`;
   const prize = {id:temporaryPrizeId,name:`Local smoke badge ${tag}`,description:'Temporary automated local-test reward',cost:1,icon:'⭐'};
   t = await action(teacher,{action:'settings',settings:{...t.classroom,powerups:true,prizes:[...t.classroom.prizes,prize]}});
@@ -94,8 +94,8 @@ try {
   const created = t.dashboard?.students?.find(s => s.code === studentCode) || (await state(teacher)).dashboard?.students?.find(s => s.code === studentCode);
   assert.ok(created, 'new student appears in teacher dashboard');
   studentId = created.id;
-  await rejected(student,{action:'login',classCode:code,studentCode,pin:'0000'},'wrong student PIN');
-  let s = await action(student,{action:'login',classCode:code,studentCode,pin});
+  await rejected(student,{action:'login',studentId,pin:'0000'},'wrong student PIN');
+  let s = await action(student,{action:'login',studentId,pin});
   assert.equal(s.student?.id,studentId);
   assert.equal(s.isTeacher,false);
   assert.equal(s.student.coins,0);

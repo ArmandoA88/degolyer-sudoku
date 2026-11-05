@@ -28,6 +28,7 @@ async function verifyPin(pin:string,stored:string){const actual=await pinHash(pi
 function tokenCookie(request:Request,token:string,maxAge=28800){const secure=new URL(request.url).protocol==='https:';return `dg_student=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure?'; Secure':''}`;}
 function rawToken(request:Request){return request.headers.get('cookie')?.split(';').map(x=>x.trim()).find(x=>x.startsWith('dg_student='))?.slice(11)??'';}
 function student(row:Row):Student{return {id:row.id,name:row.name,code:row.code,avatar:row.avatar,theme:row.theme,levelId:row.level_id,goal:row.goal,coins:row.coins,totalSolved:row.total_solved,streak:row.streak,best:parse(row.best),lastSeen:row.last_seen,helpRequested:!!row.help_requested,teacherNote:row.teacher_note};}
+function publicClassroom(row:Row):Classroom{const data=parse<Classroom>(row.data);return {id:row.id,name:data.name,teacherName:data.teacherName,powerups:data.powerups,leaderboard:data.leaderboard,prizes:data.prizes};}
 async function classroomRow(){return one('SELECT * FROM classrooms WHERE id = ?', 'main');}
 async function currentStudent(request:Request){const token=rawToken(request);if(!token||token.length>128)return null;return one('SELECT s.* FROM students s JOIN sessions a ON a.student_id=s.id WHERE a.hash=? AND a.expires_at>?',await hash(token),now());}
 async function latestGame(studentId:string){const row=await one('SELECT * FROM games WHERE student_id=? ORDER BY updated_at DESC, rowid DESC LIMIT 1',studentId);return row?{row,game:parse<StoredGame>(row.data)}:null;}
@@ -35,7 +36,7 @@ async function log(s:Row,c:Row,message:string){const event:Activity={id:id(),stu
 
 async function state(request:Request,user:ChatGPTUser|null):Promise<AppState>{
   const c=await classroomRow();const s=await currentStudent(request);const isTeacher=!!c&&user?.userId===c.owner;
-  const base:AppState={user:user?{id:user.userId,name:user.displayName}:null,classroom:c?{...parse<Classroom>(c.data),code:isTeacher?c.code:''}:null,isTeacher,student:s?student(s):null,game:null,records:[],leaderboard:[],redemptions:[]};
+  const base:AppState={user:user?{id:user.userId,name:user.displayName}:null,classroom:c?publicClassroom(c):null,isTeacher,student:s?student(s):null,game:null,records:[],leaderboard:[],redemptions:[]};
   if(!c)return base;
   if(s&&s.classroom_id===c.id){
     const g=await latestGame(s.id);base.game=g?publicGame(g.game):null;
@@ -66,7 +67,7 @@ export async function POST(request:Request){
   if(!input||typeof input!=='object'||Array.isArray(input))throw new ApiError('Invalid game action.');
   const action=String(input.action);const user=await getChatGPTUser();let c=await classroomRow();let s=await currentStudent(request);let cookie:string|undefined;let scan:number[]|undefined;
   const teacher=()=>{if(!c||!user||c.owner!==user.userId)throw new ApiError('Teacher sign-in is required.',403);return c;};
-  const learner=()=>{if(!c||!s||s.classroom_id!==c.id)throw new ApiError('Sign in with your student code and PIN.',401);return s;};
+  const learner=()=>{if(!c||!s||s.classroom_id!==c.id)throw new ApiError('Sign in with your name and PIN.',401);return s;};
 
   if(action==='setup'){
     if(!user)throw new ApiError('Sign in with ChatGPT to create your classroom.',401);
@@ -74,28 +75,28 @@ export async function POST(request:Request){
     const name=text(input.name,'Class name',60),teacherName=text(input.teacherName,'Teacher name',40);
     if(c){if(c.owner!==user.userId)throw new ApiError('This classroom already has a teacher.',403);}
     else {
-      const classCode='DG-'+hex(crypto.getRandomValues(new Uint8Array(4))).toUpperCase();
+      const storageKey='room-'+hex(crypto.getRandomValues(new Uint8Array(8)));
       const prizes:Prize[]=[];
-      const data:Classroom={id:'main',name,teacherName,code:classCode,powerups:true,leaderboard:false,prizes};
-      await sql('INSERT OR IGNORE INTO classrooms(id,owner,code,data) VALUES(?,?,?,?)','main',user.userId,classCode,JSON.stringify(data)).run();
+      const data:Classroom={id:'main',name,teacherName,powerups:true,leaderboard:false,prizes};
+      await sql('INSERT OR IGNORE INTO classrooms(id,owner,code,data) VALUES(?,?,?,?)','main',user.userId,storageKey,JSON.stringify(data)).run();
       c=await classroomRow();if(c?.owner!==user.userId)throw new ApiError('This classroom already has a teacher.',403);
     }
   } else if(action==='roster'){
-    const classCode=code(input.classCode,'Class code'),stamp=now();
+    if(!c)return json({classroom:null,students:[]});
+    const stamp=now();
     const key='roster:'+await hash(request.headers.get('cf-connecting-ip')??'shared-network');
     await sql('INSERT INTO login_attempts(key,count,reset_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN reset_at<? THEN 1 ELSE count+1 END,reset_at=CASE WHEN reset_at<? THEN ? ELSE reset_at END',key,stamp+60000,stamp,stamp,stamp+60000).run();
     const attempt=await one('SELECT count FROM login_attempts WHERE key=?',key);if(attempt&&attempt.count>120)throw new ApiError('Please wait a minute before loading classroom names again.',429);
-    if(!c||c.code!==classCode)throw new ApiError('Classroom not found. Check the code with your teacher.',404);
     const roster=await all('SELECT id,name,avatar FROM students WHERE classroom_id=? ORDER BY name,id',c.id);
     return json({classroom:{name:parse<Classroom>(c.data).name},students:roster.map(r=>({id:r.id,name:r.name,avatar:r.avatar}))});
   } else if(action==='login'){
-    const classCode=code(input.classCode,'Class code'),studentId=input.studentId?text(input.studentId,'Student',60):null,studentCode=studentId?null:code(input.studentCode,'Student code'),pin=text(input.pin,'PIN',12,4);
+    const studentId=input.studentId?text(input.studentId,'Student',60):null,studentCode=studentId?null:code(input.studentCode,'Student'),pin=text(input.pin,'PIN',12,4);
     if(!/^\d{4,12}$/.test(pin))throw new ApiError('Use your 4–12 digit PIN.');
-    const key=await hash(classCode+':'+(studentId?'id:'+studentId:'code:'+studentCode)),stamp=now();
+    const key=await hash('main:'+(studentId?'id:'+studentId:'code:'+studentCode)),stamp=now();
     await sql('INSERT INTO login_attempts(key,count,reset_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN reset_at<? THEN 1 ELSE count+1 END,reset_at=CASE WHEN reset_at<? THEN ? ELSE reset_at END',key,stamp+900000,stamp,stamp,stamp+900000).run();
     const attempt=await one('SELECT count FROM login_attempts WHERE key=?',key);if(attempt&&attempt.count>10)throw new ApiError('Too many sign-in attempts. Ask your teacher and try again in 15 minutes.',429);
-    const target=c&&c.code===classCode?studentId?await one('SELECT * FROM students WHERE classroom_id=? AND id=?',c.id,studentId):await one('SELECT * FROM students WHERE classroom_id=? AND code=?',c.id,studentCode):null;
-    if(!target||!await verifyPin(pin,target.pin_hash))throw new ApiError('Check your classroom, selected name, and PIN.',401);
+    const target=c?(studentId?await one('SELECT * FROM students WHERE classroom_id=? AND id=?',c.id,studentId):await one('SELECT * FROM students WHERE classroom_id=? AND code=?',c.id,studentCode)):null;
+    if(!target||!await verifyPin(pin,target.pin_hash))throw new ApiError('Choose your name and check your PIN.',401);
     const token=hex(crypto.getRandomValues(new Uint8Array(32)));
     await db().batch([sql('DELETE FROM sessions WHERE student_id=? OR expires_at<?',target.id,stamp),sql('INSERT INTO sessions(hash,student_id,expires_at) VALUES(?,?,?)',await hash(token),target.id,stamp+28800000),sql('DELETE FROM login_attempts WHERE key=?',key),sql('UPDATE students SET last_seen=? WHERE id=?',stamp,target.id)]);
     cookie=tokenCookie(request,token);s=target;
@@ -107,7 +108,7 @@ export async function POST(request:Request){
   } else if(action==='saveStudent'){
     const classroom=teacher();const data=input.student??{};const studentId=data.id?text(data.id,'Student ID',60):id();const existing=data.id?await one('SELECT * FROM students WHERE id=? AND classroom_id=?',studentId,classroom.id):null;
     if(data.id&&!existing)throw new ApiError('Student not found.',404);
-    const name=text(data.name,'Student nickname',30),studentCode=code(data.code,'Student code'),avatar=text(data.avatar??'🐬','Avatar',16),theme=text(data.theme??'navy','Theme',24),levelId=String(data.levelId??'easy'),goal=int(data.goal??3,'Goal',1,20);
+    const name=text(data.name,'Student nickname',30),studentCode=data.code?code(data.code,'Student code'):(existing?.code??'ST-'+hex(crypto.getRandomValues(new Uint8Array(8))).toUpperCase()),avatar=text(data.avatar??'🐬','Avatar',16),theme=text(data.theme??'navy','Theme',24),levelId=String(data.levelId??'easy'),goal=int(data.goal??3,'Goal',1,20);
     if(!LEVELS.some(l=>l.id===levelId))throw new ApiError('Choose a valid starting level.');
     const duplicate=await one('SELECT id FROM students WHERE classroom_id=? AND code=? AND id<>?',classroom.id,studentCode,studentId);if(duplicate)throw new ApiError('That student code is already in use.');
     let secret=existing?.pin_hash;

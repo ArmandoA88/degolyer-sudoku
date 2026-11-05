@@ -12,6 +12,7 @@ const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const pageFile=path.join(project,'app','page.tsx'),uiFile=path.join(project,'lib','ui.ts');
 const source=readFileSync(pageFile,'utf8');
 const retiredContent=/Maya R\.|Leo M\.|Sofia G\.|Ethan J\.|Isabella A\.|Noah T\.|Demo classroom|Example scores stay on this device|demoSolution|demoHistory/i;
+const retiredClassUi=/\b(?:classroom|class)\s+code\b|[?&]class=/i;
 const pass=message=>console.log('PASS '+message);
 
 assert.ok(existsSync(uiFile),'Shared UI helpers must be separated from retired sample data.');
@@ -33,7 +34,7 @@ function containsCleanup(node){
   if(ts.isCallExpression(node)&&ts.isIdentifier(node.expression)&&node.expression.text==='clearLegacyDemoStorage')return true;
   let found=false;ts.forEachChild(node,child=>{if(containsCleanup(child))found=true;});return found;
 }
-let mountedCleanup=false,legacyReadOrWrite=false,emptyState;
+let mountedCleanup=false,legacyReadOrWrite=false,emptyState,rosterPayloads=0,loginPayloads=0;
 function literal(node){
   if(node.kind===ts.SyntaxKind.NullKeyword)return null;
   if(node.kind===ts.SyntaxKind.FalseKeyword)return false;
@@ -47,6 +48,20 @@ function literal(node){
 }
 function visit(node){
   if(ts.isVariableDeclaration(node)&&ts.isIdentifier(node.name)&&node.name.text==='EMPTY_STATE'&&node.initializer)emptyState=literal(node.initializer);
+  if(ts.isJsxText(node))assert.equal(retiredClassUi.test(node.getText(ast)),false,'The student UI must not display a retired class-code prompt or copy label.');
+  if(ts.isJsxAttribute(node)&&node.initializer&&ts.isStringLiteral(node.initializer)){
+    assert.equal(retiredClassUi.test(node.initializer.text),false,'Visible UI attributes must not expose class-code controls.');
+    assert.equal(/^(?:classCode|classroomCode)$/i.test(node.initializer.text),false,'The student UI must not have a class-code form field.');
+  }
+  if(ts.isStringLiteralLike(node)||ts.isTemplateHead(node)||ts.isTemplateMiddle(node)||ts.isTemplateTail(node))assert.equal(/[?&]class=/.test(node.text),false,'Shared student URLs must not include a class selector.');
+  if(ts.isObjectLiteralExpression(node)){
+    const properties=node.properties.filter(ts.isPropertyAssignment),action=properties.find(property=>property.name.getText(ast).replace(/^['"]|['"]$/g,'')==='action');
+    if(action&&ts.isStringLiteralLike(action.initializer)&&['roster','login'].includes(action.initializer.text)){
+      const names=node.properties.filter(property=>ts.isPropertyAssignment(property)||ts.isShorthandPropertyAssignment(property)).map(property=>property.name.getText(ast).replace(/^['"]|['"]$/g,''));
+      assert.equal(names.includes('classCode'),false,'Student '+action.initializer.text+' must not require a class code.');
+      if(action.initializer.text==='roster')rosterPayloads++;else loginPayloads++;
+    }
+  }
   if(ts.isCallExpression(node)){
     if(ts.isIdentifier(node.expression)&&node.expression.text==='useEffect'&&node.arguments.length>=2&&ts.isArrayLiteralExpression(node.arguments[1])&&node.arguments[1].elements.length===0&&containsCleanup(node.arguments[0]))mountedCleanup=true;
     if(ts.isPropertyAccessExpression(node.expression)&&['getItem','setItem'].includes(node.expression.name.text)&&node.arguments[0]&&ts.isStringLiteralLike(node.arguments[0])&&node.arguments[0].text==='degolyer-sudoku-demo-v1')legacyReadOrWrite=true;
@@ -56,6 +71,7 @@ function visit(node){
 visit(ast);
 assert.ok(mountedCleanup,'The real student page must run the legacy-data cleanup on initial mount.');
 assert.equal(legacyReadOrWrite,false,'The page must not load or save the retired demo profile.');
+assert.ok(rosterPayloads>0&&loginPayloads>0,'The UI must load the one roster and submit selected-name/PIN login.');
 assert.equal(retiredContent.test(source),false,'Student-facing source must not include the retired named examples or fake classroom state.');
 assert.ok(emptyState,'The browser must have an explicit empty fallback before authenticating.');
 assert.equal(emptyState.user,null);assert.equal(emptyState.classroom,null);assert.equal(emptyState.student,null);assert.equal(emptyState.game,null);assert.equal(emptyState.isTeacher,false);
@@ -67,7 +83,7 @@ const clientDir=path.join(project,'dist','client');
 assert.ok(existsSync(clientDir),'Build the hosted client before running the readiness audit.');
 const clientFiles=files(clientDir).filter(file=>/\.(?:js|css|html)$/.test(file));
 assert.ok(clientFiles.some(file=>file.endsWith('.js')),'A built browser client must exist.');
-for(const file of clientFiles)assert.equal(retiredContent.test(readFileSync(file,'utf8')),false,'Built client still contains retired sample data: '+path.relative(clientDir,file));
+for(const file of clientFiles){const contents=readFileSync(file,'utf8');assert.equal(retiredContent.test(contents),false,'Built client still contains retired sample data: '+path.relative(clientDir,file));assert.equal(retiredClassUi.test(contents),false,'Built client still contains class-code prompts or shared query selectors: '+path.relative(clientDir,file));}
 pass('all built browser JavaScript, CSS, and HTML omit seeded names, example scores, and demo-state payloads');
 
 const originFlag=process.argv.indexOf('--origin');
@@ -79,12 +95,18 @@ if(originFlag>=0){
   assert.equal(response.status,200);const state=await response.json();
   assert.equal(state.user,null);assert.equal(state.isTeacher,false);assert.equal(state.student,null);assert.equal(state.game,null);
   assert.deepEqual(state.records,[]);assert.deepEqual(state.redemptions,[]);assert.equal(state.dashboard,undefined);
+  if(state.classroom)assert.equal('code' in state.classroom,false,'Public classroom metadata must omit the retired code.');
   assert.equal(retiredContent.test(JSON.stringify(state)),false);
+  const rosterResponse=await fetch(new URL('/api/game',origin),{method:'POST',headers:{'content-type':'application/json',origin:origin.origin},body:JSON.stringify({action:'roster'}),signal:AbortSignal.timeout(10000)});
+  assert.equal(rosterResponse.status,200,'The public one-classroom name picker must not require a class code.');
+  const roster=await rosterResponse.json();assert.deepEqual(Object.keys(roster).sort(),['classroom','students']);assert.ok(Array.isArray(roster.students));
+  if(roster.classroom)assert.deepEqual(Object.keys(roster.classroom),['name']);else assert.deepEqual(roster.students,[],'An unconfigured classroom must return an empty name picker.');
+  for(const student of roster.students)assert.deepEqual(Object.keys(student).sort(),['avatar','id','name'],'The public name picker must not expose PINs, scores, internal codes, or saved boards.');
   const page=await fetch(origin,{signal:AbortSignal.timeout(10000)});assert.equal(page.status,200);const html=await page.text();
-  assert.equal(retiredContent.test(html),false);
+  assert.equal(retiredContent.test(html),false);assert.equal(retiredClassUi.test(html),false);
   const assets=new Set([...html.matchAll(/(?:src|href)=["']([^"']+\.(?:js|css)(?:\?[^"']*)?)["']/g)].map(match=>new URL(match[1],origin).href).filter(url=>new URL(url).origin===origin.origin));
   assert.ok(assets.size>0,'The published page must reference its browser assets.');
-  for(const asset of assets){const result=await fetch(asset,{signal:AbortSignal.timeout(10000)});assert.equal(result.status,200);assert.equal(retiredContent.test(await result.text()),false,'Published asset still contains retired classroom samples.');}
-  pass('public Site landing page/assets contain no sample class and anonymous visitors receive no student stats');
+  for(const asset of assets){const result=await fetch(asset,{signal:AbortSignal.timeout(10000)});assert.equal(result.status,200);const contents=await result.text();assert.equal(retiredContent.test(contents),false,'Published asset still contains retired classroom samples.');assert.equal(retiredClassUi.test(contents),false,'Published asset still contains retired class-code controls.');}
+  pass('public Site has a code-free minimal name picker, no sample class, and no anonymous student stats');
 }
 console.log('Real-student readiness audit passed.');
