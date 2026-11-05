@@ -6,7 +6,7 @@ Play the [online game](https://degolyer-sudoku-studio.armandoa.chatgpt.site), or
 
 ## Standalone Windows server
 
-Download `DeGolyer-Sudoku-Server.exe` from Releases, put it in a writable folder, and double-click it. Create the teacher password and classroom, add students, then choose **Share classroom**. Students on the same network pick their name and enter their PIN. No Node.js installation is needed to run the EXE.
+Download `DeGolyer-Sudoku-Server.exe` from Releases, put it in a writable folder, and double-click it. Create the teacher password and classroom, then choose **Share classroom**. Students on the same network can choose **Create my account** with a name and private PIN, or pick an existing name and sign in. No Node.js installation is needed to run the EXE.
 
 The local server saves records in `SudokuData/classroom.sqlite` beside the EXE. Keep the server running while students play. Stop it before backing up or moving the complete data folder. The local and hosted editions use separate databases.
 
@@ -15,7 +15,7 @@ See [server instructions](SERVER-INSTRUCTIONS.txt), [build instructions](standal
 ## Classroom setup
 
 1. Open the hosted Site and choose **Set up my classroom**. The teacher signs in through ChatGPT. The first classroom belongs to that signed-in account.
-2. Open **Teacher dashboard**, add student names, and assign each student a private PIN. Use classroom nicknames or first names. Save PINs when you create them; the app does not display stored PINs.
+2. Share the game link so students can choose **Create my account**, enter a first name or nickname, and choose and confirm their private PIN. You can also add names and PINs yourself in **Teacher dashboard**. The app does not display stored PINs.
 3. Choose **Share classroom** and copy the classroom link. Share it through your school LMS, a message, or a bookmark on classroom devices. It works on school Wi-Fi and other internet-connected networks, without keeping the teacher's computer running. Students open the link, pick their name, and enter their PIN; they do not need a ChatGPT account. The teacher dashboard still requires the teacher's ChatGPT account.
 4. Customize each student's starting level, daily goal, avatar, and color theme. Adjust the classroom name, power-ups, leaderboard, and prize catalog in teacher settings.
 5. Students sign in, choose a puzzle, and play. Boards, notes, scores, and coins automatically save to the shared database after each successful action. Picking the same name and entering its PIN restores that student's saved game, records, rewards, and customizations on another device. A help button sends a visible request to the teacher.
@@ -24,7 +24,7 @@ There is one classroom, so the student link opens directly to its names. No clas
 
 The hosted version needs an internet connection. Check the save indicator before changing devices; if a change fails to save, use the offered retry or refresh action.
 
-The game starts with an empty classroom. Create the teacher classroom and add student names and PINs before the first lesson. The dashboard shows only saved classroom activity and records. Old sample progress stored by an earlier version is cleared automatically when that browser opens the updated game.
+The game starts with an empty classroom. Create the teacher classroom once before the first lesson. Students can then create their own accounts without being pre-added by the teacher. Registration signs them in automatically, and new profiles start with zero records and coins. An existing name cannot be claimed or overwritten through registration; use the name picker to sign in, or add a last initial to choose a different name. The teacher can turn **Allow students to create accounts** off after everyone has joined; existing accounts can still sign in. The dashboard shows only saved classroom activity and records. Old sample progress stored by an earlier version is cleared automatically when that browser opens the updated game.
 
 ## School colors
 

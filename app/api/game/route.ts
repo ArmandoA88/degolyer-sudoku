@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { getChatGPTUser, type ChatGPTUser } from '../../chatgpt-auth';
 import { LEVELS } from '../../../lib/sudoku';
 import { newGame, editGame, publicGame, earnedCoins, type StoredGame } from '../../../lib/server-game';
+import {normalizeStudentName,studentNameKey,registeredStudentCode,isRegisteredStudentCode,registrationAvatar} from '../../../lib/registration';
 import type { AppState, Classroom, Student, Game, ScoreRecord, Redemption, Activity, Prize } from '../../../lib/types';
 
 export const dynamic='force-dynamic';
@@ -17,6 +18,11 @@ const parse=<T,>(value:string):T=>JSON.parse(value);
 function text(value:unknown,label:string,max=80,min=1){if(typeof value!=='string'||value.trim().length<min||value.trim().length>max)throw new ApiError(`${label} must be ${min}–${max} characters.`);return value.trim();}
 function int(value:unknown,label:string,min:number,max:number){if(!Number.isInteger(value)||Number(value)<min||Number(value)>max)throw new ApiError(`${label} must be between ${min} and ${max}.`);return Number(value);}
 function code(value:unknown,label:string){const v=text(value,label,20,2).toUpperCase();if(!/^[A-Z0-9-]+$/.test(v))throw new ApiError(`${label} can use letters, numbers, and hyphens.`);return v;}
+function name(value:unknown){try{return normalizeStudentName(value);}catch(e){throw new ApiError(e instanceof Error?e.message:'Enter your name using 1–30 characters.');}}
+const enrollmentOpen=(data:Classroom)=>data.allowRegistration!==false;
+const duplicateNameMessage='That name already has an account. Use the existing account, or add your last initial to make your name different.';
+function uniqueStudentConstraint(error:unknown){return /UNIQUE constraint failed: students\.(classroom_id|code)/i.test(error instanceof Error?error.message:String(error));}
+async function nameAlreadyUsed(classroomId:string,displayName:string,exceptId?:string){const key=studentNameKey(displayName);const rows=await all('SELECT id,name FROM students WHERE classroom_id=?',classroomId);return rows.some(row=>{if(row.id===exceptId)return false;try{return studentNameKey(row.name)===key;}catch{return false;}});}
 const id=()=>crypto.randomUUID();
 const hex=(v:ArrayBuffer|Uint8Array)=>Array.from(new Uint8Array(v instanceof Uint8Array?v.buffer as ArrayBuffer:v)).map(n=>n.toString(16).padStart(2,'0')).join('');
 async function hash(value:string){return hex(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)));}
@@ -28,7 +34,7 @@ async function verifyPin(pin:string,stored:string){const actual=await pinHash(pi
 function tokenCookie(request:Request,token:string,maxAge=28800){const secure=new URL(request.url).protocol==='https:';return `dg_student=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure?'; Secure':''}`;}
 function rawToken(request:Request){return request.headers.get('cookie')?.split(';').map(x=>x.trim()).find(x=>x.startsWith('dg_student='))?.slice(11)??'';}
 function student(row:Row):Student{return {id:row.id,name:row.name,code:row.code,avatar:row.avatar,theme:row.theme,levelId:row.level_id,goal:row.goal,coins:row.coins,totalSolved:row.total_solved,streak:row.streak,best:parse(row.best),lastSeen:row.last_seen,helpRequested:!!row.help_requested,teacherNote:row.teacher_note};}
-function publicClassroom(row:Row):Classroom{const data=parse<Classroom>(row.data);return {id:row.id,name:data.name,teacherName:data.teacherName,powerups:data.powerups,leaderboard:data.leaderboard,prizes:data.prizes};}
+function publicClassroom(row:Row):Classroom{const data=parse<Classroom>(row.data);return {id:row.id,name:data.name,teacherName:data.teacherName,powerups:data.powerups,leaderboard:data.leaderboard,allowRegistration:enrollmentOpen(data),prizes:data.prizes};}
 async function classroomRow(){return one('SELECT * FROM classrooms WHERE id = ?', 'main');}
 async function currentStudent(request:Request){const token=rawToken(request);if(!token||token.length>128)return null;return one('SELECT s.* FROM students s JOIN sessions a ON a.student_id=s.id WHERE a.hash=? AND a.expires_at>?',await hash(token),now());}
 async function latestGame(studentId:string){const row=await one('SELECT * FROM games WHERE student_id=? ORDER BY updated_at DESC, rowid DESC LIMIT 1',studentId);return row?{row,game:parse<StoredGame>(row.data)}:null;}
@@ -77,7 +83,7 @@ export async function POST(request:Request){
     else {
       const storageKey='room-'+hex(crypto.getRandomValues(new Uint8Array(8)));
       const prizes:Prize[]=[];
-      const data:Classroom={id:'main',name,teacherName,powerups:true,leaderboard:false,prizes};
+      const data:Classroom={id:'main',name,teacherName,powerups:true,leaderboard:false,allowRegistration:true,prizes};
       await sql('INSERT OR IGNORE INTO classrooms(id,owner,code,data) VALUES(?,?,?,?)','main',user.userId,storageKey,JSON.stringify(data)).run();
       c=await classroomRow();if(c?.owner!==user.userId)throw new ApiError('This classroom already has a teacher.',403);
     }
@@ -89,6 +95,30 @@ export async function POST(request:Request){
     const attempt=await one('SELECT count FROM login_attempts WHERE key=?',key);if(attempt&&attempt.count>120)throw new ApiError('Please wait a minute before loading classroom names again.',429);
     const roster=await all('SELECT id,name,avatar FROM students WHERE classroom_id=? ORDER BY name,id',c.id);
     return json({classroom:{name:parse<Classroom>(c.data).name},students:roster.map(r=>({id:r.id,name:r.name,avatar:r.avatar}))});
+  } else if(action==='register'){
+    if(!c)throw new ApiError('Your teacher needs to set up the classroom before you can create an account.',409);
+    if(!enrollmentOpen(parse<Classroom>(c.data)))throw new ApiError('New accounts are closed right now. Ask your teacher for help.',403);
+    if(s)throw new ApiError('Sign out of the current student account before creating another account.',409);
+    const displayName=name(input.name),pin=input.pin;
+    if(typeof pin!=='string'||!/^\d{4,12}$/.test(pin))throw new ApiError('Choose a PIN with 4–12 digits.');
+    if(typeof input.confirmPin!=='string'||pin!==input.confirmPin)throw new ApiError('Your PINs do not match. Enter the same PIN twice.');
+    const stamp=now(),ip=request.headers.get('cf-connecting-ip')??'shared-network',attemptKey='enrollment:'+await hash(ip);
+    await sql('INSERT INTO login_attempts(key,count,reset_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN reset_at<? THEN 1 ELSE count+1 END,reset_at=CASE WHEN reset_at<? THEN ? ELSE reset_at END',attemptKey,stamp+600000,stamp,stamp,stamp+600000).run();
+    const attempt=await one('SELECT count FROM login_attempts WHERE key=?',attemptKey);if(attempt&&attempt.count>60)throw new ApiError('This classroom has created many accounts. Please wait 10 minutes or ask your teacher for help.',429);
+    if(await nameAlreadyUsed(c.id,displayName))throw new ApiError(duplicateNameMessage,409);
+    const studentId=id(),studentCode=await registeredStudentCode(displayName),secret=await pinHash(pin),avatar=registrationAvatar(input.avatar),token=hex(crypto.getRandomValues(new Uint8Array(32)));
+    const event:Activity={id:id(),studentId,studentName:displayName,text:'Created an account and ready to solve',at:stamp};
+    let results:D1Result[];
+    try{
+      results=await db().batch([
+        sql('INSERT INTO students(id,classroom_id,code,pin_hash,name,avatar,theme,level_id,goal,last_seen) SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM classrooms WHERE id=? AND COALESCE(json_extract(data,\'$.allowRegistration\'),1)=1)',studentId,c.id,studentCode,secret,displayName,avatar,'navy','easy',2,stamp,c.id),
+        sql('INSERT INTO sessions(hash,student_id,expires_at) SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM students WHERE id=?)',await hash(token),studentId,stamp+28800000,studentId),
+        sql('INSERT INTO activity(id,student_id,classroom_id,data,at) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM students WHERE id=?)',event.id,studentId,c.id,JSON.stringify(event),stamp,studentId)
+      ]);
+    }catch(e){if(uniqueStudentConstraint(e))throw new ApiError(duplicateNameMessage,409);throw e;}
+    if(!results[0].meta.changes)throw new ApiError('New accounts are closed right now. Ask your teacher for help.',403);
+    cookie=tokenCookie(request,token);
+    const headers=new Headers(request.headers);headers.set('cookie',`dg_student=${token}`);request=new Request(request.url,{headers});
   } else if(action==='login'){
     const studentId=input.studentId?text(input.studentId,'Student',60):null,studentCode=studentId?null:code(input.studentCode,'Student'),pin=text(input.pin,'PIN',12,4);
     if(!/^\d{4,12}$/.test(pin))throw new ApiError('Use your 4–12 digit PIN.');
@@ -108,19 +138,23 @@ export async function POST(request:Request){
   } else if(action==='saveStudent'){
     const classroom=teacher();const data=input.student??{};const studentId=data.id?text(data.id,'Student ID',60):id();const existing=data.id?await one('SELECT * FROM students WHERE id=? AND classroom_id=?',studentId,classroom.id):null;
     if(data.id&&!existing)throw new ApiError('Student not found.',404);
-    const name=text(data.name,'Student nickname',30),studentCode=data.code?code(data.code,'Student code'):(existing?.code??'ST-'+hex(crypto.getRandomValues(new Uint8Array(8))).toUpperCase()),avatar=text(data.avatar??'🐬','Avatar',16),theme=text(data.theme??'navy','Theme',24),levelId=String(data.levelId??'easy'),goal=int(data.goal??3,'Goal',1,20);
+    const displayName=name(data.name),studentCode=existing&&isRegisteredStudentCode(existing.code)?await registeredStudentCode(displayName):(data.code?code(data.code,'Student code'):(existing?.code??'ST-'+hex(crypto.getRandomValues(new Uint8Array(8))).toUpperCase())),avatar=text(data.avatar??'🐬','Avatar',16),theme=text(data.theme??'navy','Theme',24),levelId=String(data.levelId??'easy'),goal=int(data.goal??3,'Goal',1,20);
     if(!LEVELS.some(l=>l.id===levelId))throw new ApiError('Choose a valid starting level.');
+    if(existing&&isRegisteredStudentCode(existing.code)&&studentNameKey(existing.name)!==studentNameKey(displayName)&&await nameAlreadyUsed(classroom.id,displayName,studentId))throw new ApiError(duplicateNameMessage,409);
     const duplicate=await one('SELECT id FROM students WHERE classroom_id=? AND code=? AND id<>?',classroom.id,studentCode,studentId);if(duplicate)throw new ApiError('That student code is already in use.');
     let secret=existing?.pin_hash;
     if(data.pin||!existing){const pin=text(data.pin,'PIN',12,4);if(!/^\d{4,12}$/.test(pin))throw new ApiError('Use a 4–12 digit PIN.');secret=await pinHash(pin);}
-    if(existing){await sql('UPDATE students SET name=?,code=?,pin_hash=?,avatar=?,theme=?,level_id=?,goal=? WHERE id=? AND classroom_id=?',name,studentCode,secret,avatar,theme,levelId,goal,studentId,classroom.id).run();if(data.pin)await sql('DELETE FROM sessions WHERE student_id=?',studentId).run();}
-    else await sql('INSERT INTO students(id,classroom_id,code,pin_hash,name,avatar,theme,level_id,goal) VALUES(?,?,?,?,?,?,?,?,?)',studentId,classroom.id,studentCode,secret,name,avatar,theme,levelId,goal).run();
+    try{
+      if(existing){await sql('UPDATE students SET name=?,code=?,pin_hash=?,avatar=?,theme=?,level_id=?,goal=? WHERE id=? AND classroom_id=?',displayName,studentCode,secret,avatar,theme,levelId,goal,studentId,classroom.id).run();if(data.pin)await sql('DELETE FROM sessions WHERE student_id=?',studentId).run();}
+      else await sql('INSERT INTO students(id,classroom_id,code,pin_hash,name,avatar,theme,level_id,goal) VALUES(?,?,?,?,?,?,?,?,?)',studentId,classroom.id,studentCode,secret,displayName,avatar,theme,levelId,goal).run();
+    }catch(e){if(uniqueStudentConstraint(e))throw new ApiError(isRegisteredStudentCode(studentCode)?duplicateNameMessage:'That student code is already in use.',409);throw e;}
   } else if(action==='settings'){
     const classroom=teacher();const settings=input.settings??{};const previous=parse<Classroom>(classroom.data);
     if(!Array.isArray(settings.prizes)||settings.prizes.length>20)throw new ApiError('Add up to 20 prizes.');
     const prizes:Prize[]=settings.prizes.map((p:Row)=>({id:text(p.id,'Prize ID',50),name:text(p.name,'Prize name',50),description:text(p.description??'Teacher-approved prize','Description',160),cost:int(p.cost,'Prize cost',1,10000),icon:text(p.icon??'star','Prize icon',24)}));
     if(new Set(prizes.map(p=>p.id)).size!==prizes.length)throw new ApiError('Each prize needs its own ID.');
-    const next:Classroom={...previous,name:text(settings.name,'Class name',60),teacherName:text(settings.teacherName,'Teacher name',40),powerups:!!settings.powerups,leaderboard:!!settings.leaderboard,prizes};
+    if(settings.allowRegistration!==undefined&&typeof settings.allowRegistration!=='boolean')throw new ApiError('Choose whether students can create accounts.');
+    const next:Classroom={...previous,name:text(settings.name,'Class name',60),teacherName:text(settings.teacherName,'Teacher name',40),powerups:!!settings.powerups,leaderboard:!!settings.leaderboard,allowRegistration:settings.allowRegistration===undefined?enrollmentOpen(previous):settings.allowRegistration,prizes};
     await sql('UPDATE classrooms SET data=? WHERE id=? AND owner=?',JSON.stringify(next),classroom.id,user!.userId).run();
   } else if(action==='nudge'||action==='resolveHelp'){
     const classroom=teacher();const target=await one('SELECT * FROM students WHERE id=? AND classroom_id=?',text(input.studentId,'Student ID',60),classroom.id);if(!target)throw new ApiError('Student not found.',404);

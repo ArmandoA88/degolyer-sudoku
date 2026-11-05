@@ -5,9 +5,11 @@ Run DeGolyer-Sudoku-Server.exe. No Node.js, npm, installation, or internet conne
 FIRST RUN
 1. Double-click DeGolyer-Sudoku-Server.exe and leave its server window open.
 2. The teacher setup page opens on this computer. Create your teacher password.
-3. In the game, choose Set up my classroom, then add your student names and private PINs.
+3. In the game, choose Set up classroom once. You can add names and PINs yourself or let students create their own accounts.
 4. Open Teacher dashboard > Share classroom. Copy the classroom link and give it to students.
-5. Students open that link on a device connected to the same school Wi-Fi or wired network. They pick their name and enter their PIN.
+5. Students open that link on a device connected to the same school Wi-Fi or wired network. New students choose Create my account, enter their name, and choose and confirm a private PIN. Returning students pick their name and enter their PIN.
+
+You can turn Allow students to create accounts off in teacher settings after everyone has joined. Existing students can still sign in. Duplicate account names are blocked; students can add a last initial if needed.
 
 The server window shows the local teacher address and available network addresses. Students use a network address, not localhost or 127.0.0.1. If the computer has multiple network adapters, use the address reachable from your students' devices.
 

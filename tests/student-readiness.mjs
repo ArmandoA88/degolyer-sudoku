@@ -13,6 +13,7 @@ const pageFile=path.join(project,'app','page.tsx'),uiFile=path.join(project,'lib
 const source=readFileSync(pageFile,'utf8');
 const retiredContent=/Maya R\.|Leo M\.|Sofia G\.|Ethan J\.|Isabella A\.|Noah T\.|Demo classroom|Example scores stay on this device|demoSolution|demoHistory/i;
 const retiredClassUi=/\b(?:classroom|class)\s+code\b|[?&]class=/i;
+const registrationPayload=/(?:\baction|["'\x60]action["'\x60])\s*:\s*["'\x60]register["'\x60]/;
 const pass=message=>console.log('PASS '+message);
 
 assert.ok(existsSync(uiFile),'Shared UI helpers must be separated from retired sample data.');
@@ -34,7 +35,7 @@ function containsCleanup(node){
   if(ts.isCallExpression(node)&&ts.isIdentifier(node.expression)&&node.expression.text==='clearLegacyDemoStorage')return true;
   let found=false;ts.forEachChild(node,child=>{if(containsCleanup(child))found=true;});return found;
 }
-let mountedCleanup=false,legacyReadOrWrite=false,emptyState,rosterPayloads=0,loginPayloads=0;
+let mountedCleanup=false,legacyReadOrWrite=false,emptyState,rosterPayloads=0,loginPayloads=0,registerPayloads=0;
 function literal(node){
   if(node.kind===ts.SyntaxKind.NullKeyword)return null;
   if(node.kind===ts.SyntaxKind.FalseKeyword)return false;
@@ -56,10 +57,10 @@ function visit(node){
   if(ts.isStringLiteralLike(node)||ts.isTemplateHead(node)||ts.isTemplateMiddle(node)||ts.isTemplateTail(node))assert.equal(/[?&]class=/.test(node.text),false,'Shared student URLs must not include a class selector.');
   if(ts.isObjectLiteralExpression(node)){
     const properties=node.properties.filter(ts.isPropertyAssignment),action=properties.find(property=>property.name.getText(ast).replace(/^['"]|['"]$/g,'')==='action');
-    if(action&&ts.isStringLiteralLike(action.initializer)&&['roster','login'].includes(action.initializer.text)){
+    if(action&&ts.isStringLiteralLike(action.initializer)&&['roster','login','register'].includes(action.initializer.text)){
       const names=node.properties.filter(property=>ts.isPropertyAssignment(property)||ts.isShorthandPropertyAssignment(property)).map(property=>property.name.getText(ast).replace(/^['"]|['"]$/g,''));
       assert.equal(names.includes('classCode'),false,'Student '+action.initializer.text+' must not require a class code.');
-      if(action.initializer.text==='roster')rosterPayloads++;else loginPayloads++;
+      if(action.initializer.text==='roster')rosterPayloads++;else if(action.initializer.text==='login')loginPayloads++;else{registerPayloads++;for(const field of ['name','pin','confirmPin'])assert.ok(names.includes(field),'Student registration must submit '+field+'.');}
     }
   }
   if(ts.isCallExpression(node)){
@@ -72,6 +73,7 @@ visit(ast);
 assert.ok(mountedCleanup,'The real student page must run the legacy-data cleanup on initial mount.');
 assert.equal(legacyReadOrWrite,false,'The page must not load or save the retired demo profile.');
 assert.ok(rosterPayloads>0&&loginPayloads>0,'The UI must load the one roster and submit selected-name/PIN login.');
+assert.ok(registerPayloads>0,'The UI must provide a real student name-registration form.');
 assert.equal(retiredContent.test(source),false,'Student-facing source must not include the retired named examples or fake classroom state.');
 assert.ok(emptyState,'The browser must have an explicit empty fallback before authenticating.');
 assert.equal(emptyState.user,null);assert.equal(emptyState.classroom,null);assert.equal(emptyState.student,null);assert.equal(emptyState.game,null);assert.equal(emptyState.isTeacher,false);
@@ -84,6 +86,8 @@ assert.ok(existsSync(clientDir),'Build the hosted client before running the read
 const clientFiles=files(clientDir).filter(file=>/\.(?:js|css|html)$/.test(file));
 assert.ok(clientFiles.some(file=>file.endsWith('.js')),'A built browser client must exist.');
 for(const file of clientFiles){const contents=readFileSync(file,'utf8');assert.equal(retiredContent.test(contents),false,'Built client still contains retired sample data: '+path.relative(clientDir,file));assert.equal(retiredClassUi.test(contents),false,'Built client still contains class-code prompts or shared query selectors: '+path.relative(clientDir,file));}
+const registrationAsset=clientFiles.find(file=>file.endsWith('.js')&&registrationPayload.test(readFileSync(file,'utf8')));
+assert.ok(registrationAsset,'The built browser client must include the real name/PIN self-registration request.');
 pass('all built browser JavaScript, CSS, and HTML omit seeded names, example scores, and demo-state payloads');
 
 const originFlag=process.argv.indexOf('--origin');
@@ -107,6 +111,8 @@ if(originFlag>=0){
   const assets=new Set([...html.matchAll(/(?:src|href)=["']([^"']+\.(?:js|css)(?:\?[^"']*)?)["']/g)].map(match=>new URL(match[1],origin).href).filter(url=>new URL(url).origin===origin.origin));
   assert.ok(assets.size>0,'The published page must reference its browser assets.');
   for(const asset of assets){const result=await fetch(asset,{signal:AbortSignal.timeout(10000)});assert.equal(result.status,200);const contents=await result.text();assert.equal(retiredContent.test(contents),false,'Published asset still contains retired classroom samples.');assert.equal(retiredClassUi.test(contents),false,'Published asset still contains retired class-code controls.');}
+  const registrationUrl=new URL('/'+path.relative(clientDir,registrationAsset).split(path.sep).join('/'),origin);
+  const registrationResult=await fetch(registrationUrl,{signal:AbortSignal.timeout(10000)});assert.equal(registrationResult.status,200,'The matching self-registration browser bundle must be published.');assert.ok(registrationPayload.test(await registrationResult.text()),'The published client must offer the tested name/PIN registration flow.');
   pass('public Site has a code-free minimal name picker, no sample class, and no anonymous student stats');
 }
 console.log('Real-student readiness audit passed.');

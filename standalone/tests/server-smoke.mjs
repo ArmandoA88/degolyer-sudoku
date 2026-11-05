@@ -28,6 +28,7 @@ const dataDir=path.join(portableDir,'SudokuData');
 const password='LocalFixturePass-8246',pin='8246';
 const sampleContent=/Maya R\.|Leo M\.|Sofia G\.|Ethan J\.|Isabella A\.|Noah T\.|Demo classroom|Example scores stay on this device|demoSolution|demoHistory/i;
 const retiredClassUi=/\b(?:classroom|class)\s+code\b|[?&]class=/i;
+const registrationPayload=/(?:\baction|["'\x60]action["'\x60])\s*:\s*["'\x60]register["'\x60]/;
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const pass=text=>console.log('PASS '+text);
 let child,logs='',origin;
@@ -107,11 +108,14 @@ try{
   assert.equal(before.dashboard,undefined,'A fresh server must not contain a fake teacher dashboard.');
   assert.equal(sampleContent.test(JSON.stringify(before)),false,'Fresh server state must not contain sample records.');
   assert.deepEqual((await anonymous('/api/game',{action:'roster'})).data,{classroom:null,students:[]},'The unconfigured single classroom must return an empty name picker without a class code.');
+  const beforeSetup=await anonymous('/api/game',{action:'register',name:'New Learner',pin:'7529',confirmPin:'7529'},{allowError:true});
+  assert.equal(beforeSetup.status,409,'Student sign-up must wait until the teacher sets up the classroom.');assert.deepEqual(Object.keys(beforeSetup.data),['error']);
   pass('fresh server starts with an empty classroom, roster, game, records, and rewards');
   const teacher=device();let t=await teacherSignIn(teacher,setupUrl);
   t=await action(teacher,{action:'setup',name:'EXE Persistence Test',teacherName:'Local Teacher'});
   assert.ok(t.isTeacher&&t.classroom);assert.equal('code' in t.classroom,false,'Classroom JSON must not expose a retired class code.');
   assert.deepEqual(t.classroom.prizes,[],'A newly configured classroom must not contain sample rewards.');
+  assert.equal(t.classroom.allowRegistration,true,'New classrooms must allow student name registration by default.');
   const denied=await anonymous('/api/game',{action:'saveStudent',student:{}},{allowError:true});assert.equal(denied.status,403);
   const parallel=await Promise.all(Array.from({length:6},(_,i)=>state(i%2?teacher:spoofed)));
   parallel.forEach((value,i)=>assert.equal(value.isTeacher,!!(i%2),'Parallel requests must retain separate teacher identities.'));
@@ -120,15 +124,72 @@ try{
   const page=await anonymous('/');assert.match(page.raw,/Sudoku Studio/);assert.equal(sampleContent.test(page.raw),false,'Student landing page must not contain sample profiles.');assert.equal(retiredClassUi.test(page.raw),false,'The one-classroom page must not display class-code controls.');
   const assetPaths=[...page.raw.matchAll(/(?:src|href)=["']([^"']+\.(?:js|css)(?:\?[^"']*)?)["']/g)].map(m=>m[1]);
   assert.ok(assetPaths.some(p=>p.endsWith('.js')),'Standalone HTML must reference an embedded JavaScript client.');
-  for(const asset of assetPaths){assert.ok(asset.startsWith('/'),'Client assets must be local, not CDN URLs.');const r=await anonymous(asset);assert.equal(r.status,200);assert.equal(r.response.headers.get('cache-control'),'no-cache','Fixed asset URLs must revalidate after an EXE upgrade.');assert.ok(r.raw.length>100);assert.equal(sampleContent.test(r.raw),false,'Embedded student assets must not include sample profiles, fake scores, or demo state.');assert.equal(retiredClassUi.test(r.raw),false,'Embedded student assets must not contain class-code prompts or selected-class share URLs.');}
+  let embeddedRegistration=false;
+  for(const asset of assetPaths){assert.ok(asset.startsWith('/'),'Client assets must be local, not CDN URLs.');const r=await anonymous(asset);assert.equal(r.status,200);assert.equal(r.response.headers.get('cache-control'),'no-cache','Fixed asset URLs must revalidate after an EXE upgrade.');assert.ok(r.raw.length>100);assert.equal(sampleContent.test(r.raw),false,'Embedded student assets must not include sample profiles, fake scores, or demo state.');assert.equal(retiredClassUi.test(r.raw),false,'Embedded student assets must not contain class-code prompts or selected-class share URLs.');if(registrationPayload.test(r.raw))embeddedRegistration=true;}
+  assert.ok(embeddedRegistration,'The embedded student client must include its real name/PIN registration request.');
   for(const blocked of ['/SudokuData/classroom.sqlite','/package.json','/.env','/app/api/game/route.ts','/..%2fSudokuData%2fclassroom.sqlite','/%2e%2e%2fpackage.json']){
     const result=await anonymous(blocked,undefined,{allowError:true});assert.ok(result.status>=400,blocked+' must not serve internal files.');
   }
   pass('embedded game/CSS/JS are served locally while data, source, and traversal paths are blocked');
 
+  let selfClient=device();
+  let signup=await selfClient('/api/game',{action:'register',name:'New Learner',pin:'7529',confirmPin:'7529',avatar:'🐬',role:'teacher',isTeacher:true,coins:9999,best:{mini:0},totalSolved:99,streak:99,levelId:'expert',goal:20,theme:'malicious',code:'TEACHER'});
+  assert.equal(signup.status,200);let selfState=signup.data;const selfId=selfState.student.id;
+  assert.equal(selfState.user,null);assert.equal(selfState.isTeacher,false);assert.equal(selfState.student.name,'New Learner');
+  for(const field of ['coins','totalSolved','streak'])assert.equal(selfState.student[field],0,'Registration must not accept forged '+field+'.');
+  assert.deepEqual(selfState.student.best,{});assert.deepEqual(selfState.records,[]);assert.deepEqual(selfState.redemptions,[]);assert.equal(selfState.game,null);
+  assert.equal(selfState.student.levelId,'easy');assert.equal(selfState.student.goal,2);assert.equal(selfState.student.theme,'navy');assert.equal(selfState.student.avatar,'🐬');
+  assert.notEqual(selfState.student.code,'TEACHER','Registration must ignore a forged internal student code.');
+  assert.equal((await state(selfClient)).student.id,selfId,'Registration must establish a student session cookie.');
+  const registeredRoster=await action(device(),{action:'roster'});assert.ok(registeredRoster.students.some(row=>row.id===selfId));
+  for(const row of registeredRoster.students)assert.deepEqual(Object.keys(row).sort(),['avatar','id','name']);
+  assert.ok((await state(teacher)).dashboard.students.some(row=>row.id===selfId),'Teacher dashboard must immediately show the registered student.');
+  const selfTeacherDenied=await selfClient('/api/game',{action:'settings',settings:{}},{allowError:true});assert.equal(selfTeacherDenied.status,403);
+  const registrationError=async(payload,status)=>{const result=await device()('/api/game',payload,{allowError:true});assert.equal(result.status,status);assert.deepEqual(Object.keys(result.data),['error']);return result;};
+  await registrationError({action:'register',name:'Mismatch Learner',pin:'7529',confirmPin:'7530'},400);
+  await registrationError({action:'register',name:'Letters Learner',pin:'12AB',confirmPin:'12AB'},400);
+  await registrationError({action:'register',name:'Short Learner',pin:'123',confirmPin:'123'},400);
+  await registrationError({action:'register',name:'  NEW   learner  ',pin:'9362',confirmPin:'9362'},409);
+  const fullWidth='New Learner'.replace(/[!-~]/g,character=>String.fromCharCode(character.charCodeAt(0)+0xfee0)).replace(/ /g,'\u3000');
+  await registrationError({action:'register',name:fullWidth,pin:'9362',confirmPin:'9362'},409);
+  const raceNames=['Concurrent Signup',' concurrent   SIGNUP '];
+  const registrations=await Promise.all(raceNames.map(name=>device()('/api/game',{action:'register',name,pin:'6402',confirmPin:'6402'},{allowError:true})));
+  assert.equal(registrations.filter(result=>result.status===200).length,1,'Concurrent duplicate sign-ups must create exactly one profile.');
+  assert.equal(registrations.filter(result=>result.status===409).length,1);
+  const normalizeName=name=>name.normalize('NFKC').replace(/\s+/gu,' ').trim().toLocaleLowerCase('en-US');
+  assert.equal((await state(teacher)).dashboard.students.filter(row=>normalizeName(row.name)==='concurrent signup').length,1);
+  const unchanged=await state(selfClient);assert.equal(unchanged.student.id,selfId);assert.equal(unchanged.student.coins,0);assert.equal(unchanged.student.name,'New Learner');
+  pass('student self-registration creates a real zero-stat student cookie and rejects forged privileges, bad PINs, and duplicate/racing names');
+
+  t=await state(teacher);t=await action(teacher,{action:'settings',settings:{...t.classroom,allowRegistration:false}});assert.equal(t.classroom.allowRegistration,false);
+  await registrationError({action:'register',name:'Closed Signup',pin:'4186',confirmPin:'4186'},403);
+  assert.equal((await state(teacher)).dashboard.students.some(row=>row.name==='Closed Signup'),false,'A rejected closed sign-up must not insert a profile.');
+  await action(selfClient,{action:'logout'});selfClient=device();selfState=await action(selfClient,{action:'login',studentId:selfId,pin:'7529'});
+  assert.equal(selfState.student.id,selfId);assert.equal(selfState.classroom.allowRegistration,false,'Closing sign-up must not block existing student login.');
+  t=await action(teacher,{action:'settings',settings:{...t.classroom,allowRegistration:true}});
+  const reopened=await action(device(),{action:'register',name:'Reopened Learner',pin:'4186',confirmPin:'4186'});assert.equal(reopened.student.name,'Reopened Learner');assert.equal(reopened.student.coins,0);
+  t=await action(teacher,{action:'saveStudent',student:{name:'Reopened Learner',pin:'4931',levelId:'mini',goal:2}});
+  assert.equal(t.dashboard.students.filter(row=>row.name==='Reopened Learner').length,2,'Teacher-created legacy profiles must still support duplicate display names.');
+  t=await action(teacher,{action:'saveStudent',student:{id:reopened.student.id,name:'Reopened Learner',avatar:'🦊',theme:'silver',levelId:'mini',goal:3}});
+  assert.equal(t.dashboard.students.find(row=>row.id===reopened.student.id).goal,3,'An unchanged registered name must allow profile edits even with a teacher-created duplicate.');
+  selfState=await action(selfClient,{action:'start',levelId:'mini'});const selfSolution=solve(selfState.game);
+  for(let index=0;index<selfSolution.length;index++)if(!selfState.game.puzzle[index])selfState=await action(selfClient,{action:'move',index,value:selfSolution[index],gameId:selfState.game.id,revision:selfState.game.revision});
+  assert.equal(selfState.student.totalSolved,1);assert.equal(selfState.records.length,1);assert.ok(selfState.student.coins>0);const savedSignup=structuredClone(selfState);
+  await registrationError({action:'register',name:' new   LEARNER ',pin:'9362',confirmPin:'9362'},409);
+  const afterCompletedDuplicate=await state(selfClient);assert.deepEqual(afterCompletedDuplicate.records,savedSignup.records);assert.equal(afterCompletedDuplicate.student.coins,savedSignup.student.coins);assert.deepEqual(afterCompletedDuplicate.student.best,savedSignup.student.best);
+  await action(selfClient,{action:'logout'});
+  t=await action(teacher,{action:'saveStudent',student:{id:selfId,name:'Renamed New Learner',avatar:selfState.student.avatar,theme:selfState.student.theme,levelId:selfState.student.levelId,goal:selfState.student.goal}});
+  assert.equal(t.dashboard.students.find(row=>row.id===selfId).name,'Renamed New Learner');
+  const reclaimed=await action(device(),{action:'register',name:'New Learner',pin:'3186',confirmPin:'3186'});const reclaimedId=reclaimed.student.id;
+  assert.notEqual(reclaimedId,selfId,'A renamed registration must release its old name without moving the old student record.');assert.equal(reclaimed.student.coins,0);assert.deepEqual(reclaimed.records,[]);
+  const renamedDevice=device(),renamed=await action(renamedDevice,{action:'login',studentId:selfId,pin:'7529'});
+  assert.equal(renamed.student.name,'Renamed New Learner');assert.equal(renamed.student.id,selfId);assert.deepEqual(renamed.records,savedSignup.records);assert.equal(renamed.student.coins,savedSignup.student.coins);assert.deepEqual(renamed.student.best,savedSignup.student.best);
+  pass('teacher can close/reopen sign-up; registered student records survive name/PIN login and teacher renaming without overwriting a reused name');
+
   t=await action(teacher,{action:'saveStudent',student:{name:'EXE Student',pin,levelId:'mini',goal:2}});
   const student=t.dashboard.students.find(s=>s.name==='EXE Student');assert.ok(student);
   assert.equal(student.avatar,'🐬');assert.equal(student.theme,'navy','Real student profiles must default to the DeGolyer blue theme.');
+  await registrationError({action:'register',name:' exe   STUDENT ',pin:'9362',confirmPin:'9362'},409);
   const first=device();const roster=await action(first,{action:'roster'});
   assert.deepEqual(Object.keys(roster).sort(),['classroom','students']);assert.deepEqual(Object.keys(roster.classroom),['name']);
   assert.ok(roster.students.some(s=>s.id===student.id));
@@ -148,11 +209,12 @@ try{
 
   await stop();
   const legacyDatabase=new DatabaseSync(path.join(dataDir,'classroom.sqlite'));
-  try{const row=legacyDatabase.prepare('SELECT data FROM classrooms WHERE id=?').get('main');const legacyClassroom=JSON.parse(row.data);legacyClassroom.code='OLD-CLASS-CODE';legacyDatabase.prepare('UPDATE classrooms SET data=? WHERE id=?').run(JSON.stringify(legacyClassroom),'main');}finally{legacyDatabase.close();}
+  try{const row=legacyDatabase.prepare('SELECT data FROM classrooms WHERE id=?').get('main');const legacyClassroom=JSON.parse(row.data);legacyClassroom.code='OLD-CLASS-CODE';delete legacyClassroom.allowRegistration;legacyDatabase.prepare('UPDATE classrooms SET data=? WHERE id=?').run(JSON.stringify(legacyClassroom),'main');}finally{legacyDatabase.close();}
   await start(cwdB);
   assert.ok(!logs.includes('/teacher?setup='),'Restart must retain the configured teacher password.');
   const teacherAgain=device();t=await teacherSignIn(teacherAgain);
   assert.ok(t.isTeacher);assert.equal(t.classroom.name,'EXE Persistence Test');assert.equal('code' in t.classroom,false);
+  assert.equal(t.classroom.allowRegistration,true,'Legacy classrooms with no sign-up flag must default to allowing name registration.');
   const fresh=device();await action(fresh,{action:'roster'});
   const restored=await action(fresh,{action:'login',studentId:student.id,pin});
   assert.deepEqual(restored.game,saved.game,'Restart + new device must restore exact paused puzzle, notes, timer, and counters.');
@@ -161,6 +223,10 @@ try{
   assert.equal(t.dashboard.students.find(row=>row.id===student.id).totalSolved,1);
   const badPinDevice=device(),badPin=await badPinDevice('/api/game',{action:'login',studentId:student.id,pin:'0000'},{allowError:true});assert.equal(badPin.status,401);assert.deepEqual(Object.keys(badPin.data),['error']);
   const rejectedState=await state(badPinDevice);assert.equal(rejectedState.student,null);assert.equal(rejectedState.game,null);assert.deepEqual(rejectedState.records,[]);
+  const restoredSignup=await action(device(),{action:'login',studentId:selfId,pin:'7529'});
+  assert.equal(restoredSignup.student.name,'Renamed New Learner');assert.deepEqual(restoredSignup.records,savedSignup.records);assert.equal(restoredSignup.student.coins,savedSignup.student.coins);assert.deepEqual(restoredSignup.student.best,savedSignup.student.best);
+  const restoredReused=await action(device(),{action:'login',studentId:reclaimedId,pin:'3186'});assert.equal(restoredReused.student.name,'New Learner');assert.equal(restoredReused.student.coins,0);assert.deepEqual(restoredReused.records,[]);
+  const legacySignup=await action(device(),{action:'register',name:'Legacy Enabled Learner',pin:'5317',confirmPin:'5317'});assert.equal(legacySignup.student.name,'Legacy Enabled Learner');assert.equal(legacySignup.student.coins,0);
   pass('restart from another folder preserves legacy classroom data and exact student records while hiding retired class codes');
 
   await stop();const defaultServer=await start(cwdB,false);

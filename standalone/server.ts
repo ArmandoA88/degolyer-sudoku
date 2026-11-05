@@ -28,7 +28,7 @@ function options():Options|null{
     console.log('DeGolyer ES Sudoku Server\n\nDouble-click the EXE to start the game and open teacher setup.\n\nOptions: --port 8787 --host 0.0.0.0 --data-dir PATH --no-open\nDeveloper options: --assets FILE --migrations FILE\n\nStudent data is saved in SudokuData beside the EXE. Keep that folder when moving the server.');
     return null;
   }
-  if(args.includes('--version')){console.log('DeGolyer ES Sudoku Server 1.2.0');return null;}
+  if(args.includes('--version')){console.log('DeGolyer ES Sudoku Server 1.3.0');return null;}
   const executableFolder=isSea()?dirname(process.execPath):process.cwd();
   const result:Options={port:8787,host:'0.0.0.0',dataDir:join(executableFolder,'SudokuData'),noOpen:false};
   for(let index=0;index<args.length;index++){
