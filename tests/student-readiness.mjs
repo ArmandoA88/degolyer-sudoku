@@ -35,7 +35,7 @@ function containsCleanup(node){
   if(ts.isCallExpression(node)&&ts.isIdentifier(node.expression)&&node.expression.text==='clearLegacyDemoStorage')return true;
   let found=false;ts.forEachChild(node,child=>{if(containsCleanup(child))found=true;});return found;
 }
-let mountedCleanup=false,legacyReadOrWrite=false,emptyState,rosterPayloads=0,loginPayloads=0,registerPayloads=0;
+let mountedCleanup=false,legacyReadOrWrite=false,emptyState,loginPayloads=0,registerPayloads=0;
 function literal(node){
   if(node.kind===ts.SyntaxKind.NullKeyword)return null;
   if(node.kind===ts.SyntaxKind.FalseKeyword)return false;
@@ -60,7 +60,13 @@ function visit(node){
     if(action&&ts.isStringLiteralLike(action.initializer)&&['roster','login','register'].includes(action.initializer.text)){
       const names=node.properties.filter(property=>ts.isPropertyAssignment(property)||ts.isShorthandPropertyAssignment(property)).map(property=>property.name.getText(ast).replace(/^['"]|['"]$/g,''));
       assert.equal(names.includes('classCode'),false,'Student '+action.initializer.text+' must not require a class code.');
-      if(action.initializer.text==='roster')rosterPayloads++;else if(action.initializer.text==='login')loginPayloads++;else{registerPayloads++;for(const field of ['name','pin','confirmPin'])assert.ok(names.includes(field),'Student registration must submit '+field+'.');}
+      if(action.initializer.text==='login'){
+        loginPayloads++;for(const field of ['name','pin'])assert.ok(names.includes(field),'Student login must submit '+field+'.');
+        assert.equal(names.includes('studentId'),false,'The student form must sign in by typed name.');
+      }else if(action.initializer.text==='register'){
+        registerPayloads++;for(const field of ['name','pin'])assert.ok(names.includes(field),'Student registration must submit '+field+'.');
+        assert.equal(names.includes('confirmPin'),false,'Students create an account using only their name and one four-digit PIN field.');
+      }
     }
   }
   if(ts.isCallExpression(node)){
@@ -72,7 +78,7 @@ function visit(node){
 visit(ast);
 assert.ok(mountedCleanup,'The real student page must run the legacy-data cleanup on initial mount.');
 assert.equal(legacyReadOrWrite,false,'The page must not load or save the retired demo profile.');
-assert.ok(rosterPayloads>0&&loginPayloads>0,'The UI must load the one roster and submit selected-name/PIN login.');
+assert.ok(loginPayloads>0,'The UI must submit typed-name/four-digit PIN login.');
 assert.ok(registerPayloads>0,'The UI must provide a real student name-registration form.');
 assert.equal(retiredContent.test(source),false,'Student-facing source must not include the retired named examples or fake classroom state.');
 assert.ok(emptyState,'The browser must have an explicit empty fallback before authenticating.');

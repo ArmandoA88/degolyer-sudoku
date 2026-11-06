@@ -1,6 +1,6 @@
 /**
- * Local shared-database/name-selection integration check. Creates two fixture
- * students with identical display names, games, and a record. Never hosted data.
+ * Local shared-database/typed-name integration check. Creates two distinct
+ * fixture students, rejects duplicate names, and restores saved progress. Never hosted data.
  * Run after local migrations/API are ready:
  *   node tests/name-persistence-smoke.mjs http://127.0.0.1:5173
  */
@@ -11,7 +11,8 @@ assert.ok(target.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].inc
 const base = target.origin;
 const tag = Date.now().toString(36).slice(-6).toUpperCase();
 const displayName = `Name Test ${tag}`;
-const pin = '8246', duplicatePin = '9362';
+const otherName = `Other Name ${tag}`;
+const pin = '8246', otherPin = '9362';
 
 function newDevice() {
   const jar = new Map();
@@ -37,10 +38,11 @@ const act=async(device,payload)=>(await device(payload)).body;
 const get=async device=>(await device()).body;
 const pass=message=>console.log(`PASS ${message}`);
 
-function assertPrivateFailure(result,label) {
+function assertPrivateFailure(result,label,expectedCode) {
   assert.ok(result.status>=400&&typeof result.body.error==='string',`${label} should return an HTTP error`);
-  assert.deepEqual(Object.keys(result.body),['error'],`${label} must not include student data or server details`);
-  for(const secret of [pin,duplicatePin,'pin_hash','PBKDF2','SELECT ','INSERT ','stack','solution'])assert.ok(!JSON.stringify(result.body).includes(secret),`${label} leaked ${secret}`);
+  assert.deepEqual(Object.keys(result.body).sort(),expectedCode?['code','error']:['error'],`${label} must not include student data or server details`);
+  if(expectedCode)assert.equal(result.body.code,expectedCode);
+  for(const secret of [pin,otherPin,'pin_hash','PBKDF2','SELECT ','INSERT ','stack','solution'])assert.ok(!JSON.stringify(result.body).includes(secret),`${label} leaked ${secret}`);
 }
 
 function solve(game) {
@@ -70,10 +72,12 @@ const firstCode=`NA${tag}`;
 t=await act(teacher,{action:'saveStudent',student:{name:displayName,code:firstCode,pin,avatar:'🐼',theme:'navy',levelId:'mini',goal:3}});
 const first=t.dashboard.students.find(s=>s.name===displayName);
 assert.ok(first);
-t=await act(teacher,{action:'saveStudent',student:{name:displayName,pin:duplicatePin,avatar:'🌻',theme:'silver',levelId:'mini',goal:3}});
-const duplicate=t.dashboard.students.find(s=>s.name===displayName&&s.id!==first.id);
-assert.ok(duplicate&&duplicate.id!==first.id);
-assert.equal(duplicate.name,first.name);
+const duplicateName=await teacher({action:'saveStudent',student:{name:`  ${displayName.toUpperCase().replace(/ /g,'   ')}  `,pin:otherPin,avatar:'🌻',theme:'silver',levelId:'mini',goal:3}},'/api/game',true);
+assert.equal(duplicateName.status,409);assertPrivateFailure(duplicateName,'normalized duplicate teacher enrollment');
+assert.match(duplicateName.body.error,/already has an account/i);
+t=await act(teacher,{action:'saveStudent',student:{name:otherName,pin:otherPin,avatar:'🌻',theme:'silver',levelId:'mini',goal:3}});
+const other=t.dashboard.students.find(s=>s.name===otherName);
+assert.ok(other&&other.id!==first.id);
 
 const rosterDevice=newDevice();
 let roster=await act(rosterDevice,{action:'roster'});
@@ -82,20 +86,25 @@ assert.deepEqual(Object.keys(roster.classroom),['name']);
 assert.equal(roster.classroom.name,t.classroom.name);
 for(const row of roster.students)assert.deepEqual(Object.keys(row).sort(),['avatar','id','name'],'public roster must contain only minimal name-picker fields');
 const matching=roster.students.filter(row=>row.name===displayName);
-assert.equal(matching.length,2);
-assert.deepEqual(matching.map(row=>row.id).sort(),[first.id,duplicate.id].sort());
-pass('minimal class roster supports duplicate display names with distinct stable IDs');
+assert.equal(matching.length,1);assert.equal(matching[0].id,first.id);
+assert.equal(roster.students.find(row=>row.name===otherName).id,other.id);
+pass('normalized duplicate names are blocked while distinct names retain stable private accounts');
 
 const legacyCodeRoster=await act(newDevice(),{action:'roster',classCode:`RETIRED-${tag}`});
 assert.deepEqual(legacyCodeRoster,roster,'A retired class-code parameter must be ignored for the single classroom.');
 const wrongDevice=newDevice();
-const wrong=await wrongDevice({action:'login',studentId:first.id,pin:'0000'},'/api/game',true);
-assertPrivateFailure(wrong,'wrong selected-student PIN');
+const countBefore=(await get(teacher)).dashboard.students.length;
+const unknown=await newDevice()({action:'login',name:`Missing ${tag}`,pin},'/api/game',true);
+assertPrivateFailure(unknown,'unknown typed name','ACCOUNT_NOT_FOUND');
+assert.equal((await get(teacher)).dashboard.students.length,countBefore,'An unknown name must never create an account automatically.');
+const wrong=await wrongDevice({action:'login',name:displayName,pin:'0000'},'/api/game',true);
+assertPrivateFailure(wrong,'wrong typed-name PIN','PIN_INCORRECT');
+assert.match(wrong.body.error,/already has an account/i);
 let anonymous=await get(wrongDevice);
 assert.equal(anonymous.student,null);assert.equal(anonymous.game,null);assert.deepEqual(anonymous.records,[]);
-pass('single-class name selection needs no class code; wrong PIN exposes no board, records, or server secrets');
+pass('typed-name login needs no class code; wrong PIN and unknown names expose no records and create no accounts');
 
-let s=await act(firstDevice,{action:'login',studentId:first.id,pin});
+let s=await act(firstDevice,{action:'login',name:`  ${displayName.toLowerCase().replace(/ /g,'   ')}  `,pin});
 assert.equal(s.student.id,first.id);
 s=await act(firstDevice,{action:'start',levelId:'mini'});
 const solution=solve(s.game);
@@ -120,21 +129,21 @@ pass('clean completion saves coins, personal best, record, profile, and next puz
 const secondDevice=newDevice();
 roster=await act(secondDevice,{action:'roster'});
 assert.equal(roster.students.find(row=>row.id===first.id).avatar,'🦊');
-s=await act(secondDevice,{action:'login',studentId:first.id,pin});
+s=await act(secondDevice,{action:'login',name:displayName,pin});
 assert.equal(s.student.id,saved.student.id);
 assert.deepEqual(s.game,saved.game,'a fresh device must restore the exact paused puzzle, board, notes, timer, and counters');
-for(const field of ['coins','totalSolved','streak','best','avatar','theme','levelId','goal'])assert.deepEqual(s.student[field],saved.student[field],`fresh device must restore ${field}`);
+for(const field of ['coins','totalSolved','streak','best','avatar','theme','blockAvatar','awards','levelId','goal'])assert.deepEqual(s.student[field],saved.student[field],`fresh device must restore ${field}`);
 assert.deepEqual(s.records,saved.records,'records must come from the shared database');
 pass('a separate device restores the same student, exact game state, bests, coins, profile, and records');
 
-const duplicateDevice=newDevice();
-const duplicateWrong=await duplicateDevice({action:'login',studentId:duplicate.id,pin},'/api/game',true);
-assertPrivateFailure(duplicateWrong,'other duplicate-name student PIN');
-const d=await act(duplicateDevice,{action:'login',studentId:duplicate.id,pin:duplicatePin});
-assert.equal(d.student.id,duplicate.id);assert.equal(d.student.name,saved.student.name);
+const otherDevice=newDevice();
+const otherWrong=await otherDevice({action:'login',name:otherName,pin},'/api/game',true);
+assertPrivateFailure(otherWrong,'other student PIN','PIN_INCORRECT');
+const d=await act(otherDevice,{action:'login',name:otherName,pin:otherPin});
+assert.equal(d.student.id,other.id);assert.equal(d.student.name,otherName);
 assert.equal(d.student.coins,0);assert.equal(d.student.totalSolved,0);assert.deepEqual(d.student.best,{});
 assert.deepEqual(d.records,[]);assert.equal(d.game,null);
-pass('identical names keep separate PINs, game state, records, coins, and bests');
+pass('each student name and PIN opens only that student’s game state, records, coins, and bests');
 
 const renamed=`Renamed ${tag}`;
 t=await act(teacher,{action:'saveStudent',student:{id:first.id,name:renamed,avatar:s.student.avatar,theme:s.student.theme,levelId:s.student.levelId,goal:s.student.goal}});
@@ -150,9 +159,9 @@ await act(secondDevice,{action:'logout'});
 const thirdDevice=newDevice();
 roster=await act(thirdDevice,{action:'roster'});
 assert.equal(roster.students.find(row=>row.id===first.id).name,renamed);
-s=await act(thirdDevice,{action:'login',studentId:first.id,pin});
+s=await act(thirdDevice,{action:'login',name:renamed,pin});
 assert.equal(s.student.name,renamed);assert.equal(s.student.id,first.id);
 assert.deepEqual(s.game,saved.game);assert.deepEqual(s.records,saved.records);
 assert.equal(s.student.coins,saved.student.coins);assert.deepEqual(s.student.best,saved.student.best);
 pass('teacher rename retains stable identity, PIN, game, records, coins, and personal best across new-device login');
-console.log(`Name persistence smoke test passed. Local fixture IDs: ${first.id} (${renamed}); ${duplicate.id} (${displayName}).`);
+console.log(`Name persistence smoke test passed. Local fixture IDs: ${first.id} (${renamed}); ${other.id} (${otherName}).`);

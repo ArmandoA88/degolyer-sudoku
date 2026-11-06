@@ -32,7 +32,7 @@ try{
   const signin=await teacher(undefined,'/signin-with-chatgpt?return_to=/');assert.ok([200,302,303,307,308].includes(signin.status));
   let t=await okay(teacher);assert.ok(t.isTeacher&&t.classroom,'Use the local fixture classroom owned by the mock teacher.');
   originalSettings=structuredClone(t.classroom);
-  const prizeId=`race-${tag}`,prize={id:prizeId,name:`Concurrency fixture ${tag}`,description:'Local race-test reward',cost:10,icon:'star'};
+  const prizeId=`race-${tag}`,prize={id:prizeId,name:`Concurrency fixture ${tag}`,description:'Local race-test reward',cost:1,icon:'star'};
   await okay(teacher,{action:'settings',settings:{...t.classroom,prizes:[...t.classroom.prizes,prize]}});
   t=await okay(teacher,{action:'saveStudent',student:{name:`Concurrency ${tag}`,code,pin,avatar:'owl',theme:'sage',levelId:'mini',goal:3}});
   const fixture=t.dashboard.students.find(s=>s.code===code);assert.ok(fixture);
@@ -54,17 +54,17 @@ try{
   const completions=await Promise.all([student(final),student(final)]);
   assert.equal(completions.filter(r=>r.status===200).length,1,JSON.stringify(completions.map(r=>({status:r.status,error:r.body.error}))));
   assert.equal(completions.filter(r=>r.status===409).length,1);
-  s=await okay(student);assert.equal(s.game.status,'completed');assert.equal(s.student.totalSolved,1);assert.equal(s.student.coins,30);assert.equal(s.records.filter(r=>r.id===s.game.id).length,1);
+  s=await okay(student);assert.equal(s.game.status,'completed');assert.equal(s.student.totalSolved,1);assert.equal(s.student.coins,1);assert.equal(s.records.filter(r=>r.id===s.game.id).length,1);
   const replay=await student(final);assert.equal(replay.status,409);
-  snapshot=await okay(student);assert.equal(snapshot.student.coins,30);assert.equal(snapshot.student.totalSolved,1);assert.equal(snapshot.records.length,1);
-  console.log('PASS concurrent final moves and replay produce exactly one record, one solved count, and 30 coins');
+  snapshot=await okay(student);assert.equal(snapshot.student.coins,1);assert.equal(snapshot.student.totalSolved,1);assert.equal(snapshot.records.length,1);
+  console.log('PASS concurrent final moves and replay produce exactly one record, one solved count, and 1 coin');
 
   const claims=await Promise.all(Array.from({length:8},()=>student({action:'redemption',prizeId})));
-  const successful=claims.filter(r=>r.status===200).length;assert.equal(successful,3,JSON.stringify(claims.map(r=>({status:r.status,error:r.body.error}))));
+  const successful=claims.filter(r=>r.status===200).length;assert.equal(successful,1,JSON.stringify(claims.map(r=>({status:r.status,error:r.body.error}))));
   assert.ok(claims.filter(r=>r.status!==200).every(r=>r.status===400));
-  s=await okay(student);assert.equal(s.student.coins,0);assert.equal(s.redemptions.filter(r=>r.prizeName===prize.name).length,3);
+  s=await okay(student);assert.equal(s.student.coins,0);assert.equal(s.redemptions.filter(r=>r.prizeName===prize.name).length,1);
   const noCoins=await student({action:'redemption',prizeId});assert.equal(noCoins.status,400);s=await okay(student);assert.equal(s.student.coins,0);
-  console.log('PASS eight concurrent prize claims spend only the available 30 coins, create three requests, and never go negative');
+  console.log('PASS eight concurrent prize claims spend only the available 1 coin, create one request, and never go negative');
   console.log(`Concurrency smoke passed. Local fixture retained: ${code} (${fixture.id}).`);
 }finally{
   if(originalSettings){await okay(teacher,{action:'settings',settings:originalSettings});console.log('Restored classroom settings and prize catalog.');}

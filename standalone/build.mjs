@@ -12,12 +12,16 @@ const projectDir = path.dirname(sourceDir);
 const workspaceDir = path.dirname(projectDir);
 const outputDir = path.join(projectDir, 'outputs', 'standalone');
 const webDir = path.join(outputDir, 'web');
-const executableName = 'DeGolyer-Sudoku-Server.exe';
+const outputNameFlag=process.argv.indexOf('--output-name');
+const executableName=outputNameFlag<0?'DeGolyer-Sudoku-Server.exe':process.argv[outputNameFlag+1];
+if(!executableName||!/^[A-Za-z0-9][A-Za-z0-9._-]*\.exe$/i.test(executableName))throw new Error('Use --output-name with a simple .exe filename in the workspace root.');
 const nodeExecutable = process.env.SUDOKU_NODE_BINARY || process.execPath;
 const postjectCli = process.env.SUDOKU_POSTJECT_CLI || path.join(workspaceDir, '.tooling', 'sea-tools', 'node_modules', 'postject', 'dist', 'cli.js');
 const finalExecutable = path.join(workspaceDir, executableName);
 const packagedExecutable = path.join(outputDir, executableName);
 const webOnly = process.argv.includes('--web-only');
+const cloudflaredBinary=process.env.SUDOKU_CLOUDFLARED_BINARY||path.join(workspaceDir,'cloudflared.exe');
+const cloudflaredMetadataFile=path.join(sourceDir,'cloudflared-release.json');
 
 if (process.platform !== 'win32' || process.arch !== 'x64') {
   throw new Error('Build this Windows x64 executable using Windows x64 Node.js.');
@@ -44,16 +48,10 @@ const offlineBrowserPlugin = {
       let code = await readFile(file, 'utf8');
       const replacements = [
         ['/signin-with-chatgpt?return_to=/', '/teacher'],
-        ['One classroom link connects your students to their own saved game on any device with internet access.', 'One classroom link connects students to their saved game on this school network while the classroom server is running.'],
-        ['Students open it on school Wi-Fi or another internet connection. A browser is all they need.', 'Students open it on the same school Wi-Fi or wired network as the server. A browser is all they need.'],
-        ['Students do not need a ChatGPT account. Your teacher dashboard still requires your teacher sign-in. Add student names before sharing the link.', 'Students use their name and PIN. Open the teacher dashboard on the server computer using its local teacher password. Add student names before sharing the link.'],
         ['No student ChatGPT account is needed.', 'No student account outside this classroom is needed.'],
         ['Students pick their name and enter their private PIN. No student ChatGPT account is needed.', 'Students pick their name and enter their private PIN on the same network as this server.'],
-        ['Teacher access uses your signed-in account. Sign in first to create and protect your classroom dashboard.', 'Teacher access uses the password created on this server computer. Sign in locally to create and protect your classroom dashboard.'],
-        ['Sign in to set up', 'Teacher sign in'],
       ];
       for (const [from,to] of replacements) code = code.replaceAll(from,to);
-      code = code.replaceAll("window.location.origin+'/'", "((window as any).__SUDOKU_SHARE_ORIGIN__||window.location.origin)+'/'");
       return {contents:code, loader:'tsx', resolveDir:path.dirname(file)};
     });
   },
@@ -82,6 +80,7 @@ const licenses = [
   ['React', path.join(projectDir,'node_modules','react','LICENSE')],
   ['React DOM', path.join(projectDir,'node_modules','react-dom','LICENSE')],
   ['Lucide React', path.join(projectDir,'node_modules','lucide-react','LICENSE')],
+  ['Cloudflare cloudflared', path.join(sourceDir,'CLOUDFLARED-LICENSE.txt')],
 ];
 let notices = 'DeGolyer ES Sudoku Studio — bundled third-party software notices\n\n';
 for (const [name, file] of licenses) {
@@ -147,6 +146,10 @@ for (const output of Object.values(serverBuild.metafile.outputs)) {
 }
 await writeFile(path.join(outputDir,'server-metafile.json'),JSON.stringify(serverBuild.metafile,null,2));
 
+if(!existsSync(cloudflaredBinary))throw new Error('The tunnel build input is missing. Run node standalone/download-cloudflared.mjs before building the standalone EXE.');
+const cloudflaredMetadata=JSON.parse(await readFile(cloudflaredMetadataFile,'utf8'));
+const cloudflaredBytes=await readFile(cloudflaredBinary);
+if(createHash('sha256').update(cloudflaredBytes).digest('hex')!==cloudflaredMetadata.sha256)throw new Error('The cloudflared build input does not match the pinned official release checksum.');
 const config = {
   main:bundledServer,
   output:path.join(outputDir,'sea-prep.blob'),
@@ -155,7 +158,7 @@ const config = {
   useCodeCache:false,
   execArgv:['--disable-warning=ExperimentalWarning'],
   execArgvExtension:'none',
-  assets:{'web-assets.json':assetsFile,'migrations.json':migrationsFile},
+  assets:{'web-assets.json':assetsFile,'migrations.json':migrationsFile,'cloudflared.exe':cloudflaredBinary,'cloudflared-release.json':cloudflaredMetadataFile},
 };
 const configFile = path.join(outputDir,'sea-config.json');
 await writeFile(configFile,JSON.stringify(config,null,2));
@@ -168,7 +171,12 @@ run(nodeExecutable,['--experimental-sea-config',configFile]);
 await copyFile(nodeExecutable,packagedExecutable);
 run(nodeExecutable,[postjectCli,packagedExecutable,'NODE_SEA_BLOB',config.output,'--sentinel-fuse','NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2']);
 await copyFile(packagedExecutable,finalExecutable);
+if(executableName==='DeGolyer-Sudoku-Server.exe'){
+  await copyFile(path.join(sourceDir,'Start-Sudoku-Online.cmd'),path.join(workspaceDir,'Start-Sudoku-Online.cmd'));
+  const cloudflaredLicense=path.join(sourceDir,'CLOUDFLARED-LICENSE.txt');
+  if(existsSync(cloudflaredLicense))await copyFile(cloudflaredLicense,path.join(workspaceDir,'CLOUDFLARED-LICENSE.txt'));
+}
 const exeBytes = await readFile(finalExecutable);
-const details = {executable:finalExecutable,size:exeBytes.length,sha256:createHash('sha256').update(exeBytes).digest('hex'),node:process.version,assetCount:Object.keys(assets).length};
+const details = {executable:finalExecutable,size:exeBytes.length,sha256:createHash('sha256').update(exeBytes).digest('hex'),node:process.version,assetCount:Object.keys(assets).length,embeddedCloudflared:{version:cloudflaredMetadata.version,sha256:cloudflaredMetadata.sha256,size:cloudflaredBytes.length}};
 await writeFile(path.join(outputDir,'build-info.json'),JSON.stringify(details,null,2));
 console.log(JSON.stringify(details,null,2));

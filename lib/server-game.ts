@@ -1,4 +1,4 @@
-import { generatePuzzle, LEVELS, isComplete } from './sudoku';
+import { generatePuzzle, completionCoins, isComplete } from './sudoku';
 import type { Game } from './types';
 export type StoredGame = Game & {solution:number[];history:{board:number[];notes:number[][]}[];clockAt:number;freezeUntil:number;elapsedMs:number};
 export function newGame(levelId:string,now=Date.now()):StoredGame {
@@ -54,4 +54,4 @@ export function editGame(raw:StoredGame,input:Record<string,unknown>,powerupsAll
   g.updatedAt=now;g.revision++;
   return {game:g,scan};
 }
-export function earnedCoins(game:StoredGame){return (LEVELS.find(l=>l.id===game.levelId)?.baseCoins??20)+(game.mistakes===0?10:0);}
+export function earnedCoins(game:StoredGame){return completionCoins(game.levelId,game.mistakes);}

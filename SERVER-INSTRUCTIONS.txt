@@ -1,42 +1,71 @@
 DEGOLYER ES SUDOKU — STANDALONE CLASSROOM SERVER
 
-Run DeGolyer-Sudoku-Server.exe. No Node.js, npm, installation, or internet connection is needed to play on your local network.
+Copy the single DeGolyer-Sudoku-Server.exe into a writable folder and double-click it. It contains the game and Cloudflare Tunnel and automatically creates a public HTTPS student link. No separate cloudflared.exe or launcher is required.
+
+Online mode needs internet. For school-network play without internet, run DeGolyer-Sudoku-Server.exe --offline. Neither mode requires Node.js, npm, or a Cloudflare account. Third-party license notices are embedded in the EXE and available at /licenses.txt while it is running.
 
 FIRST RUN
-1. Double-click DeGolyer-Sudoku-Server.exe and leave its server window open.
-2. The teacher setup page opens on this computer. Create your teacher password.
-3. In the game, choose Set up classroom once. You can add names and PINs yourself or let students create their own accounts.
-4. Open Teacher dashboard > Share classroom. Copy the classroom link and give it to students.
-5. Students open that link on a device connected to the same school Wi-Fi or wired network. New students choose Create my account, enter their name, and choose and confirm a private PIN. Returning students pick their name and enter their PIN.
+1. Double-click DeGolyer-Sudoku-Server.exe and leave the server running.
+2. The teacher dashboard opens directly on this computer at http://127.0.0.1:8787/teacher. No teacher password, setup code, or sign-in is required.
+3. On the first run, enter your classroom name and teacher name once. Later visits open the saved dashboard and controls. You can add student names and PINs yourself or let students create their own accounts.
+4. Open Teacher dashboard > Share classroom. In online mode, wait for the public HTTPS link to appear, then copy it for students. In local mode, copy the school network link.
+5. Students open the link in a browser. The public HTTPS link works from other internet-connected networks; the school network link requires a network route to your computer. Returning students type their name and four-digit PIN to sign in. These are the only two student sign-in fields.
+6. If no account matches the name, the game offers an explicit Create new account step. A new student enters a name and four-digit PIN. Creating an account starts a new record; use the same name and PIN every time to keep existing scores and rewards. A wrong PIN for an existing name should be checked with the teacher instead of creating another account.
 
 You can turn Allow students to create accounts off in teacher settings after everyone has joined. Existing students can still sign in. Duplicate account names are blocked; students can add a last initial if needed.
 
-The server window shows the local teacher address and available network addresses. Students use a network address, not localhost or 127.0.0.1. If the computer has multiple network adapters, use the address reachable from your students' devices.
+The server window shows the local teacher address, available school network addresses, and the public HTTPS link when the tunnel is ready. Give students the student link, not localhost or 127.0.0.1. If using a school network link on a computer with multiple network adapters, choose the address reachable from the students' devices.
 
 SAVED RECORDS
-The server creates SudokuData beside the EXE. Student profiles, puzzles, notes, scores, personal bests, coins, prizes, and teacher settings are stored in SudokuData/classroom.sqlite. This data survives closing and restarting the EXE.
+The server creates SudokuData beside the EXE. Student profiles, puzzles, notes, scores, personal bests, coins, prizes, earned awards, block avatar customizations and upgrades, and teacher settings are stored in SudokuData/classroom.sqlite. This data survives closing and restarting the EXE. Students sign in with their existing name and PIN to see their saved progress, even on another device.
+
+Students can edit their block avatar and earn upgrades while solving puzzles. Keep using the existing account to retain the avatar, upgrades, and awards along with scores and coins.
+
+ACCESSORY AND COIN UPDATE
+The updated game has 15 avatar accessories priced from 100 to 2,500 coins. Students can browse all accessories, their collection, or unowned items they can afford. Accessories they already own remain theirs and can be equipped without paying again. Teacher-set classroom prize prices are unchanged.
+
+Each completed Mini puzzle gives exactly 1 coin, including a mistake-free finish. Bigger puzzles give more: Explorer 35 coins, Challenger 55, Expert 80, and Master 110, with 10 extra coins for a mistake-free finish on those levels. The difficulty buttons show the reward amounts.
+
+For later updates, a separate DeGolyer-Sudoku-Server-Update.exe can be prepared beside the current EXE while students play. A running EXE keeps its embedded game version. To activate an update after class, stop the previous server and run the update EXE from this same folder so the existing SudokuData classroom and student records are retained. Run only one server against the classroom at a time.
 
 Keep the server computer on and the EXE running while students play. The save indicator confirms successful saves. A failed save shows retry or reload controls.
 
 To back up or move the classroom, first stop the server, then copy the EXE and its entire SudokuData folder together. Keep the backup private because it contains classroom records.
 
-This local server has its own classroom database. The previously published online game uses its cloud database; there is no automatic synchronization between the two editions.
+Local and Cloudflare Tunnel modes use this same classroom database on your computer. The separately hosted online Site uses its own cloud database; there is no automatic synchronization with that Site.
 
 TEACHER ACCESS
-Teacher administration is available on the server computer at http://127.0.0.1:8787/teacher and uses the password you create. Student devices use the classroom link and their PINs. The local edition does not require ChatGPT sign-in.
+Open http://127.0.0.1:8787/teacher on the server computer to go directly to the dashboard and controls. There is no teacher password or login step. First-time classroom setup asks only for the classroom name and teacher name. The saved classroom and all existing student records remain when the server restarts or is updated.
+
+Teacher pages and controls are available only on the server computer. Student network links and the public tunnel do not provide teacher access. The normal student page stays separate and uses student names and four-digit PINs. This standalone server does not require ChatGPT sign-in.
 
 NETWORK ACCESS
+ONLINE MODE
+The EXE starts online mode by default and uses its embedded Cloudflare Tunnel helper to create a public HTTPS student link. It automatically extracts and verifies the helper in SudokuData/runtime; you do not need to download or place a separate helper beside the EXE. Cloudflare forwards student requests to the app on your computer. The app and all saved classroom data stay on your computer. The older Start-Sudoku-Online.cmd launcher remains compatible but is unnecessary.
+
+Keep the computer awake, its internet connection active, and the server window open. Wait until Share classroom shows the HTTPS link before sending it to students outside the school network. If the tunnel fails, the public link is marked unavailable and a same-network fallback is labeled separately. Check the server window for the connection error.
+
+The Quick Tunnel address is temporary and changes each time you start a new tunnel. Share the new address for that session. Existing student names, PINs, scores, prizes, awards, avatars, and upgrades remain saved in SudokuData even when the address changes. A permanent public hostname needs a separate Cloudflare account, domain, and named-tunnel setup; this EXE does not configure one.
+
+The tunnel makes an outbound connection. It does not require opening an incoming router port. Your school network must allow the Cloudflare connection. No school firewall or network settings are changed by the launcher.
+
+LOCAL NETWORK MODE
+Run DeGolyer-Sudoku-Server.exe --offline for local network play. This explicit offline mode works without internet access and does not extract or start the tunnel helper.
+
 The default server port is 8787. Student devices must be able to reach that port on the server computer. If Windows or your school firewall requires permission for incoming connections, your IT team may need to approve the server on the classroom network.
 
 The EXE displays its current network links each time it starts. A computer's network address can change when it changes networks.
 
 STOPPING AND OPTIONS
-Press Ctrl+C in the server window to stop it.
+Press Ctrl+C in the server window to save and stop the server and its tunnel process.
 Optional command-line arguments:
   --port 8790              Use a different port.
   --host 127.0.0.1         Allow only this computer to connect.
   --data-dir "D:/Sudoku"   Store classroom data in a chosen folder.
   --no-open               Do not open the teacher page automatically.
+  --offline               Use local network play without starting the tunnel.
+  --tunnel                Explicitly enable online mode (already the EXE default).
+  --cloudflared "D:/Tools/cloudflared.exe"  Override the embedded helper for development or testing.
   --help                  Show available options.
 
-This is a Windows x64 executable. You can copy the single EXE to another Windows x64 computer; it creates its own data folder there. To retain an existing classroom, copy its SudokuData folder too.
+This is a Windows x64 executable. Copy the single EXE to another Windows x64 computer for either online or local network play. It creates its own SudokuData folder and verified runtime automatically. To retain an existing classroom, copy its entire SudokuData folder too.

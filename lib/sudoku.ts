@@ -11,12 +11,18 @@ export type SudokuLevel = {
 };
 
 export const LEVELS: SudokuLevel[] = [
-  { id: "mini", name: "Mini", size: 4, boxRows: 2, boxCols: 2, blanks: 8, baseCoins: 20, description: "A friendly 4 × 4 start. Use numbers 1–4." },
+  { id: "mini", name: "Mini", size: 4, boxRows: 2, boxCols: 2, blanks: 8, baseCoins: 1, description: "A friendly 4 × 4 start. Use numbers 1–4." },
   { id: "easy", name: "Explorer", size: 6, boxRows: 2, boxCols: 3, blanks: 20, baseCoins: 35, description: "Build your skills on a 6 × 6 board. Use 1–6." },
   { id: "medium", name: "Challenger", size: 9, boxRows: 3, boxCols: 3, blanks: 42, baseCoins: 55, description: "Take on classic 9 × 9 Sudoku. Use 1–9." },
   { id: "hard", name: "Expert", size: 9, boxRows: 3, boxCols: 3, blanks: 49, baseCoins: 80, description: "Fewer clues, more careful thinking. Use 1–9." },
   { id: "expert", name: "Master", size: 9, boxRows: 3, boxCols: 3, blanks: 54, baseCoins: 110, description: "Our biggest challenge for confident solvers." },
 ];
+
+/** One shared reward rule for the classroom server and student reward previews. */
+export function completionCoins(levelId:string,mistakes:number):number {
+  if(levelId==='mini')return 1;
+  return (LEVELS.find(level=>level.id===levelId)?.baseCoins??20)+(mistakes===0?10:0);
+}
 
 export type SudokuPuzzle = {
   levelId: string;

@@ -26,5 +26,29 @@ test('powerup settings, notes, scan, and unique completion rewards',()=>{
   ({game}=editGame(game,{action:'move',index:i,value:game.solution[i]%4+1},true,3000));
   const scanned=editGame(game,{action:'powerup',kind:'scan'},true,4000);assert.deepEqual(scanned.scan,[i]);game=scanned.game;
   for(let j=0;j<game.board.length;j++)if(game.board[j]!==game.solution[j])({game}=editGame(game,{action:'move',index:j,value:game.solution[j]},true,5000+j*1000));
-  assert.equal(game.status,'completed');assert.equal(game.progress,100);assert.equal(earnedCoins(game),20);assert.throws(()=>editGame(game,{action:'move',index:i,value:0},true,99000));
+  assert.equal(game.status,'completed');assert.equal(game.progress,100);assert.equal(earnedCoins(game),1);assert.throws(()=>editGame(game,{action:'move',index:i,value:0},true,99000));
+});
+
+function completedGame(levelId:string,{mistake=false,assisted=false}={}){
+  let game=newGame(levelId,1000);const index=game.puzzle.findIndex(value=>!value);
+  if(mistake)({game}=editGame(game,{action:'move',index,value:game.solution[index]%game.size+1},true,2000));
+  if(assisted)({game}=editGame(game,{action:'powerup',kind:'hint',index},true,3000));
+  for(let cell=0;cell<game.board.length;cell++)if(game.board[cell]!==game.solution[cell])({game}=editGame(game,{action:'move',index:cell,value:game.solution[cell]},true,4000+cell*1000));
+  assert.equal(game.status,'completed');return game;
+}
+
+test('Mini completions always earn exactly one coin, including perfect and assisted games',()=>{
+  for(const options of [{},{assisted:true},{mistake:true},{mistake:true,assisted:true}]){
+    const game=completedGame('mini',options);
+    assert.equal(game.mistakes,options.mistake?1:0);assert.equal(game.usedPowerups,options.assisted??false);
+    assert.equal(earnedCoins(game),1,`Mini reward must stay one coin for ${JSON.stringify(options)}.`);
+  }
+});
+
+test('larger puzzles retain their clean-completion bonus and normal mistake rewards',()=>{
+  for(const [levelId,normal,clean] of [['easy',35,45],['medium',55,65],['hard',80,90],['expert',110,120]] as const){
+    assert.equal(earnedCoins(completedGame(levelId)),clean);
+    assert.equal(earnedCoins(completedGame(levelId,{assisted:true})),clean);
+    assert.equal(earnedCoins(completedGame(levelId,{mistake:true})),normal);
+  }
 });

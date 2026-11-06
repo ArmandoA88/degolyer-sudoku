@@ -3,11 +3,12 @@ import { getChatGPTUser, type ChatGPTUser } from '../../chatgpt-auth';
 import { LEVELS } from '../../../lib/sudoku';
 import { newGame, editGame, publicGame, earnedCoins, type StoredGame } from '../../../lib/server-game';
 import {normalizeStudentName,studentNameKey,registeredStudentCode,isRegisteredStudentCode,registrationAvatar} from '../../../lib/registration';
+import {AVATAR_COLORS,AVATAR_FACES,AVATAR_ITEMS,avatarUpgradeCost,readBlockAvatar,earnedAwards} from '../../../lib/avatar';
 import type { AppState, Classroom, Student, Game, ScoreRecord, Redemption, Activity, Prize } from '../../../lib/types';
 
 export const dynamic='force-dynamic';
 type Row=Record<string,any>;
-class ApiError extends Error {constructor(message:string,public status=400){super(message);}}
+class ApiError extends Error {constructor(message:string,public status=400,public code?:string){super(message);}}
 const now=()=>Date.now();
 const json=(data:unknown,status=200,cookie?:string)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store',...(cookie?{'Set-Cookie':cookie}:{})}});
 const db=()=>{if(!env.DB)throw new ApiError('Shared classroom storage is unavailable. Please try again.',503);return env.DB;};
@@ -21,6 +22,7 @@ function code(value:unknown,label:string){const v=text(value,label,20,2).toUpper
 function name(value:unknown){try{return normalizeStudentName(value);}catch(e){throw new ApiError(e instanceof Error?e.message:'Enter your name using 1–30 characters.');}}
 const enrollmentOpen=(data:Classroom)=>data.allowRegistration!==false;
 const duplicateNameMessage='That name already has an account. Use the existing account, or add your last initial to make your name different.';
+function fourDigitPin(value:unknown){if(typeof value!=='string'||!/^\d{4}$/.test(value))throw new ApiError('Enter your four-digit PIN.');return value;}
 function uniqueStudentConstraint(error:unknown){return /UNIQUE constraint failed: students\.(classroom_id|code)/i.test(error instanceof Error?error.message:String(error));}
 async function nameAlreadyUsed(classroomId:string,displayName:string,exceptId?:string){const key=studentNameKey(displayName);const rows=await all('SELECT id,name FROM students WHERE classroom_id=?',classroomId);return rows.some(row=>{if(row.id===exceptId)return false;try{return studentNameKey(row.name)===key;}catch{return false;}});}
 const id=()=>crypto.randomUUID();
@@ -33,7 +35,7 @@ async function pinHash(pin:string,salt=hex(crypto.getRandomValues(new Uint8Array
 async function verifyPin(pin:string,stored:string){const actual=await pinHash(pin,stored.split(':')[0]);let difference=actual.length^stored.length;for(let i=0;i<Math.max(actual.length,stored.length);i++)difference|=(actual.charCodeAt(i)||0)^(stored.charCodeAt(i)||0);return difference===0;}
 function tokenCookie(request:Request,token:string,maxAge=28800){const secure=new URL(request.url).protocol==='https:';return `dg_student=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure?'; Secure':''}`;}
 function rawToken(request:Request){return request.headers.get('cookie')?.split(';').map(x=>x.trim()).find(x=>x.startsWith('dg_student='))?.slice(11)??'';}
-function student(row:Row):Student{return {id:row.id,name:row.name,code:row.code,avatar:row.avatar,theme:row.theme,levelId:row.level_id,goal:row.goal,coins:row.coins,totalSolved:row.total_solved,streak:row.streak,best:parse(row.best),lastSeen:row.last_seen,helpRequested:!!row.help_requested,teacherNote:row.teacher_note};}
+function student(row:Row):Student{return {id:row.id,name:row.name,code:row.code,avatar:row.avatar,theme:row.theme,blockAvatar:readBlockAvatar(row.block_avatar),awards:earnedAwards(row.awards,row.total_solved,row.streak),levelId:row.level_id,goal:row.goal,coins:row.coins,totalSolved:row.total_solved,streak:row.streak,best:parse(row.best),lastSeen:row.last_seen,helpRequested:!!row.help_requested,teacherNote:row.teacher_note};}
 function publicClassroom(row:Row):Classroom{const data=parse<Classroom>(row.data);return {id:row.id,name:data.name,teacherName:data.teacherName,powerups:data.powerups,leaderboard:data.leaderboard,allowRegistration:enrollmentOpen(data),prizes:data.prizes};}
 async function classroomRow(){return one('SELECT * FROM classrooms WHERE id = ?', 'main');}
 async function currentStudent(request:Request){const token=rawToken(request);if(!token||token.length>128)return null;return one('SELECT s.* FROM students s JOIN sessions a ON a.student_id=s.id WHERE a.hash=? AND a.expires_at>?',await hash(token),now());}
@@ -61,7 +63,7 @@ async function state(request:Request,user:ChatGPTUser|null):Promise<AppState>{
 }
 
 export async function GET(request:Request){try{return json(await state(request,await getChatGPTUser()));}catch(e){return failure(e);}}
-function failure(error:unknown){if(error instanceof ApiError)return json({error:error.message},error.status);console.error('Classroom operation failed',error instanceof Error?error.message:'unknown');return json({error:'The classroom could not save this change. Please try again.'},500);}
+function failure(error:unknown){if(error instanceof ApiError)return json({error:error.message,...(error.code?{code:error.code}:{})},error.status);console.error('Classroom operation failed',error instanceof Error?error.message:'unknown');return json({error:'The classroom could not save this change. Please try again.'},500);}
 
 export async function POST(request:Request){
  try {
@@ -74,6 +76,12 @@ export async function POST(request:Request){
   const action=String(input.action);const user=await getChatGPTUser();let c=await classroomRow();let s=await currentStudent(request);let cookie:string|undefined;let scan:number[]|undefined;
   const teacher=()=>{if(!c||!user||c.owner!==user.userId)throw new ApiError('Teacher sign-in is required.',403);return c;};
   const learner=()=>{if(!c||!s||s.classroom_id!==c.id)throw new ApiError('Sign in with your name and PIN.',401);return s;};
+
+  if(request.headers.get('x-sudoku-public-ingress')==='1'&&['login','register'].includes(action)){
+    const stamp=now(),key='public-auth:'+await hash(request.headers.get('cf-connecting-ip')??'public-network');
+    await sql('INSERT INTO login_attempts(key,count,reset_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN reset_at<? THEN 1 ELSE count+1 END,reset_at=CASE WHEN reset_at<? THEN ? ELSE reset_at END',key,stamp+900000,stamp,stamp,stamp+900000).run();
+    const attempt=await one('SELECT count FROM login_attempts WHERE key=?',key);if(attempt&&attempt.count>120)throw new ApiError('Too many sign-in attempts from this network. Wait 15 minutes or ask your teacher for help.',429);
+  }
 
   if(action==='setup'){
     if(!user)throw new ApiError('Sign in with ChatGPT to create your classroom.',401);
@@ -88,6 +96,7 @@ export async function POST(request:Request){
       c=await classroomRow();if(c?.owner!==user.userId)throw new ApiError('This classroom already has a teacher.',403);
     }
   } else if(action==='roster'){
+    if(request.headers.get('x-sudoku-public-ingress')==='1')throw new ApiError('Enter your own name and four-digit PIN to sign in.',403);
     if(!c)return json({classroom:null,students:[]});
     const stamp=now();
     const key='roster:'+await hash(request.headers.get('cf-connecting-ip')??'shared-network');
@@ -99,9 +108,8 @@ export async function POST(request:Request){
     if(!c)throw new ApiError('Your teacher needs to set up the classroom before you can create an account.',409);
     if(!enrollmentOpen(parse<Classroom>(c.data)))throw new ApiError('New accounts are closed right now. Ask your teacher for help.',403);
     if(s)throw new ApiError('Sign out of the current student account before creating another account.',409);
-    const displayName=name(input.name),pin=input.pin;
-    if(typeof pin!=='string'||!/^\d{4,12}$/.test(pin))throw new ApiError('Choose a PIN with 4–12 digits.');
-    if(typeof input.confirmPin!=='string'||pin!==input.confirmPin)throw new ApiError('Your PINs do not match. Enter the same PIN twice.');
+    const displayName=name(input.name),pin=fourDigitPin(input.pin);
+    if(input.confirmPin!==undefined&&pin!==input.confirmPin)throw new ApiError('Your PINs do not match.');
     const stamp=now(),ip=request.headers.get('cf-connecting-ip')??'shared-network',attemptKey='enrollment:'+await hash(ip);
     await sql('INSERT INTO login_attempts(key,count,reset_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN reset_at<? THEN 1 ELSE count+1 END,reset_at=CASE WHEN reset_at<? THEN ? ELSE reset_at END',attemptKey,stamp+600000,stamp,stamp,stamp+600000).run();
     const attempt=await one('SELECT count FROM login_attempts WHERE key=?',attemptKey);if(attempt&&attempt.count>60)throw new ApiError('This classroom has created many accounts. Please wait 10 minutes or ask your teacher for help.',429);
@@ -120,13 +128,18 @@ export async function POST(request:Request){
     cookie=tokenCookie(request,token);
     const headers=new Headers(request.headers);headers.set('cookie',`dg_student=${token}`);request=new Request(request.url,{headers});
   } else if(action==='login'){
-    const studentId=input.studentId?text(input.studentId,'Student',60):null,studentCode=studentId?null:code(input.studentCode,'Student'),pin=text(input.pin,'PIN',12,4);
-    if(!/^\d{4,12}$/.test(pin))throw new ApiError('Use your 4–12 digit PIN.');
-    const key=await hash('main:'+(studentId?'id:'+studentId:'code:'+studentCode)),stamp=now();
+    const displayName=input.name!==undefined?name(input.name):null;
+    const studentId=!displayName&&input.studentId?text(input.studentId,'Student',60):null,studentCode=!displayName&&!studentId?code(input.studentCode,'Student'):null,pin=fourDigitPin(input.pin);
+    const key=await hash('main:'+(displayName?'name:'+studentNameKey(displayName):studentId?'id:'+studentId:'code:'+studentCode)),stamp=now();
     await sql('INSERT INTO login_attempts(key,count,reset_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN reset_at<? THEN 1 ELSE count+1 END,reset_at=CASE WHEN reset_at<? THEN ? ELSE reset_at END',key,stamp+900000,stamp,stamp,stamp+900000).run();
     const attempt=await one('SELECT count FROM login_attempts WHERE key=?',key);if(attempt&&attempt.count>10)throw new ApiError('Too many sign-in attempts. Ask your teacher and try again in 15 minutes.',429);
-    const target=c?(studentId?await one('SELECT * FROM students WHERE classroom_id=? AND id=?',c.id,studentId):await one('SELECT * FROM students WHERE classroom_id=? AND code=?',c.id,studentCode)):null;
-    if(!target||!await verifyPin(pin,target.pin_hash))throw new ApiError('Choose your name and check your PIN.',401);
+    const candidates=c?(displayName?(await all('SELECT * FROM students WHERE classroom_id=?',c.id)).filter(row=>{try{return studentNameKey(row.name)===studentNameKey(displayName);}catch{return false;}}):await all(studentId?'SELECT * FROM students WHERE classroom_id=? AND id=?':'SELECT * FROM students WHERE classroom_id=? AND code=?',c.id,studentId??studentCode)):[];
+    if(!candidates.length)throw new ApiError('No account was found for that name. Check your spelling. If this is your first visit, choose Create a new account.',401,'ACCOUNT_NOT_FOUND');
+    const matches:Row[]=[];
+    for(const candidate of candidates)if(await verifyPin(pin,candidate.pin_hash))matches.push(candidate);
+    if(!matches.length)throw new ApiError('That name already has an account, but the PIN does not match. Try your usual PIN or ask your teacher to reset it. Your scores and rewards are saved in that account.',401,'PIN_INCORRECT');
+    if(matches.length>1)throw new ApiError('More than one saved account has this name and PIN. Ask your teacher to add a last initial to your account name.',409,'ACCOUNT_AMBIGUOUS');
+    const target=matches[0];
     const token=hex(crypto.getRandomValues(new Uint8Array(32)));
     await db().batch([sql('DELETE FROM sessions WHERE student_id=? OR expires_at<?',target.id,stamp),sql('INSERT INTO sessions(hash,student_id,expires_at) VALUES(?,?,?)',await hash(token),target.id,stamp+28800000),sql('DELETE FROM login_attempts WHERE key=?',key),sql('UPDATE students SET last_seen=? WHERE id=?',stamp,target.id)]);
     cookie=tokenCookie(request,token);s=target;
@@ -138,12 +151,12 @@ export async function POST(request:Request){
   } else if(action==='saveStudent'){
     const classroom=teacher();const data=input.student??{};const studentId=data.id?text(data.id,'Student ID',60):id();const existing=data.id?await one('SELECT * FROM students WHERE id=? AND classroom_id=?',studentId,classroom.id):null;
     if(data.id&&!existing)throw new ApiError('Student not found.',404);
-    const displayName=name(data.name),studentCode=existing&&isRegisteredStudentCode(existing.code)?await registeredStudentCode(displayName):(data.code?code(data.code,'Student code'):(existing?.code??'ST-'+hex(crypto.getRandomValues(new Uint8Array(8))).toUpperCase())),avatar=text(data.avatar??'🐬','Avatar',16),theme=text(data.theme??'navy','Theme',24),levelId=String(data.levelId??'easy'),goal=int(data.goal??3,'Goal',1,20);
+    const displayName=name(data.name),studentCode=existing&&isRegisteredStudentCode(existing.code)?await registeredStudentCode(displayName):(data.code?code(data.code,'Student code'):(existing?.code??await registeredStudentCode(displayName))),avatar=text(data.avatar??'🐬','Avatar',16),theme=text(data.theme??'navy','Theme',24),levelId=String(data.levelId??'easy'),goal=int(data.goal??3,'Goal',1,20);
     if(!LEVELS.some(l=>l.id===levelId))throw new ApiError('Choose a valid starting level.');
-    if(existing&&isRegisteredStudentCode(existing.code)&&studentNameKey(existing.name)!==studentNameKey(displayName)&&await nameAlreadyUsed(classroom.id,displayName,studentId))throw new ApiError(duplicateNameMessage,409);
+    if((!existing||studentNameKey(existing.name)!==studentNameKey(displayName))&&await nameAlreadyUsed(classroom.id,displayName,studentId))throw new ApiError(duplicateNameMessage,409);
     const duplicate=await one('SELECT id FROM students WHERE classroom_id=? AND code=? AND id<>?',classroom.id,studentCode,studentId);if(duplicate)throw new ApiError('That student code is already in use.');
     let secret=existing?.pin_hash;
-    if(data.pin||!existing){const pin=text(data.pin,'PIN',12,4);if(!/^\d{4,12}$/.test(pin))throw new ApiError('Use a 4–12 digit PIN.');secret=await pinHash(pin);}
+    if(data.pin||!existing){const pin=fourDigitPin(data.pin);secret=await pinHash(pin);}
     try{
       if(existing){await sql('UPDATE students SET name=?,code=?,pin_hash=?,avatar=?,theme=?,level_id=?,goal=? WHERE id=? AND classroom_id=?',displayName,studentCode,secret,avatar,theme,levelId,goal,studentId,classroom.id).run();if(data.pin)await sql('DELETE FROM sessions WHERE student_id=?',studentId).run();}
       else await sql('INSERT INTO students(id,classroom_id,code,pin_hash,name,avatar,theme,level_id,goal) VALUES(?,?,?,?,?,?,?,?,?)',studentId,classroom.id,studentCode,secret,displayName,avatar,theme,levelId,goal).run();
@@ -165,6 +178,22 @@ export async function POST(request:Request){
     if(!['approved','delivered'].includes(input.status))throw new ApiError('Choose an allowed prize status.');const data=parse<Redemption>(r.data);if(data.status==='delivered'&&input.status!=='delivered')throw new ApiError('This prize was already delivered.');data.status=input.status;await sql('UPDATE redemptions SET data=? WHERE id=?',JSON.stringify(data),r.id).run();
   } else if(action==='profile'){
     const target=learner();await sql('UPDATE students SET avatar=?,theme=?,last_seen=? WHERE id=?',text(input.avatar,'Avatar',16),text(input.theme,'Theme',24),now(),target.id).run();
+  } else if(action==='avatar'){
+    const target=learner();const {color,face,accessory}=input;
+    if(!AVATAR_COLORS.some(item=>item.id===color)||!AVATAR_FACES.some(item=>item.id===face)||!['none',...AVATAR_ITEMS.map(item=>item.id)].includes(accessory))throw new ApiError('Choose a block color, face, and accessory from your collection.');
+    const result=await sql("UPDATE students SET block_avatar=json_set(block_avatar,'$.color',?,'$.face',?,'$.accessory',?),last_seen=? WHERE id=? AND (?='none' OR EXISTS(SELECT 1 FROM json_each(block_avatar,'$.owned') WHERE value=?))",color,face,accessory,now(),target.id,accessory,accessory).run();
+    if(!result.meta.changes)throw new ApiError('Earn this accessory in the block shop before wearing it.',409);
+  } else if(action==='avatarBuy'){
+    const target=learner();const item=AVATAR_ITEMS.find(item=>item.id===input.itemId);if(!item)throw new ApiError('Choose an accessory from the block shop.');
+    const result=await sql("UPDATE students SET coins=coins-?,block_avatar=json_insert(block_avatar,'$.owned[#]',?),last_seen=? WHERE id=? AND coins>=? AND NOT EXISTS(SELECT 1 FROM json_each(block_avatar,'$.owned') WHERE value=?)",item.cost,item.id,now(),target.id,item.cost,item.id).run();
+    if(!result.meta.changes)throw new ApiError('You already own this accessory, or need more coins. Your coins are safe.',409);
+    await log(target,c!,`Unlocked block accessory: ${item.name}`);
+  } else if(action==='avatarUpgrade'){
+    const target=learner();const avatar=readBlockAvatar(target.block_avatar),cost=avatarUpgradeCost(avatar.level);
+    if(cost===null)throw new ApiError('Your block buddy is already at the highest level.');
+    const result=await sql("UPDATE students SET coins=coins-?,block_avatar=json_set(block_avatar,'$.level',?),last_seen=? WHERE id=? AND coins>=? AND json_extract(block_avatar,'$.level')=?",cost,avatar.level+1,now(),target.id,cost,avatar.level).run();
+    if(!result.meta.changes)throw new ApiError('You need more coins, or your buddy was already upgraded. Refresh your collection.',409);
+    await log(target,c!,`Upgraded block buddy to level ${avatar.level+1}`);
   } else if(action==='help'){
     const target=learner();const message=input.message?text(input.message,'Help message',200):'I would like help with my puzzle.';await sql('UPDATE students SET help_requested=1,last_seen=? WHERE id=?',now(),target.id).run();await log(target,c!,`Help requested: ${message}`);
   } else if(action==='redemption'){
@@ -187,7 +216,10 @@ export async function POST(request:Request){
       if(g.status==='completed'){
         const coins=earnedCoins(g);const record:ScoreRecord={id:g.id,studentId:target.id,studentName:target.name,levelId:g.levelId,seconds:g.elapsed,mistakes:g.mistakes,hints:g.hints,coins,assisted:g.usedPowerups,completedAt:now()};const bestPath='$.'+g.levelId;
         statements.push(sql('INSERT OR IGNORE INTO records(id,game_id,student_id,classroom_id,data,completed_at) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM games WHERE id=? AND revision=? AND status=\'completed\')',record.id,g.id,target.id,c!.id,JSON.stringify(record),record.completedAt,g.id,g.revision));
-        statements.push(sql('UPDATE students SET coins=coins+?,total_solved=total_solved+1,streak=CASE WHEN ?=0 THEN streak+1 ELSE 0 END,best=CASE WHEN ?=0 AND (json_extract(best,?) IS NULL OR json_extract(best,?)>?) THEN json_set(best,?,?) ELSE best END,last_seen=?,help_requested=0 WHERE id=? AND changes()=1',coins,g.mistakes,g.usedPowerups?1:0,bestPath,bestPath,g.elapsed,bestPath,g.elapsed,now(),target.id));
+        const awards:Record<string,boolean>={};
+        for(const award of earnedAwards(target.awards,target.total_solved+1,g.mistakes===0?target.streak+1:0))awards[award]=true;
+        if(g.mistakes===0&&!g.usedPowerups)awards.perfect=true;
+        statements.push(sql('UPDATE students SET coins=coins+?,total_solved=total_solved+1,streak=CASE WHEN ?=0 THEN streak+1 ELSE 0 END,best=CASE WHEN ?=0 AND (json_extract(best,?) IS NULL OR json_extract(best,?)>?) THEN json_set(best,?,?) ELSE best END,awards=json_patch(awards,?),last_seen=?,help_requested=0 WHERE id=? AND changes()=1',coins,g.mistakes,g.usedPowerups?1:0,bestPath,bestPath,g.elapsed,bestPath,g.elapsed,JSON.stringify(awards),now(),target.id));
       }
       statements.push(sql('UPDATE students SET last_seen=? WHERE id=?',now(),target.id));const result=await db().batch(statements);if(!result[0].meta.changes)throw new ApiError('Your game changed in another tab. Refresh and try again.',409);
       if(g.status==='completed')await log(target,c!,`Solved ${LEVELS.find(l=>l.id===g.levelId)!.name} in ${g.elapsed}s${g.usedPowerups?' with power-ups':''}`);
